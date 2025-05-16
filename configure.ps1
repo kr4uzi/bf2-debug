@@ -5,7 +5,6 @@
 param (
   [string]$BF2Dir
 )
-main -UserBF2Dir $BF2Dir
 
 function Get-RegistryKey32Value {
   param (
@@ -55,7 +54,7 @@ function Get-BattlefieldDirectory {
   }
 
   if (Test-Path "$bf2Dir\\dice_py.dll") {
-    Write-Host "Using Battlefield 2 Directory: $bf2Dir"
+    Write-Host "> Using Battlefield 2 Directory: $bf2Dir"
     return $bf2Dir
   }
 
@@ -85,7 +84,7 @@ function Get-Battlefield2PythonVersion {
    } -RunAs32 -ArgumentList $BF2Dir
   $pyVersion = $script | Wait-Job | Receive-Job
   if ($pyVersion -match '(\d+\.\d+\.\d+)') {
-    Write-Host "Detected python version $pyVersion"
+    Write-Host "> Detected python version $($Matches[1])"
     return $Matches[1]
   }
 }
@@ -96,7 +95,7 @@ function Get-VSCommandCmd {
     return "VsDevCmd.bat"
   }
 
-  Write-Host "Autodetecting Visual Studio installation ..."
+  Write-Host "Detecting Visual Studio installation ..."
   $programFilesX86 = ${env:ProgramFiles(x86)}
   if (-not $programFilesX86) {
     $programFilesX86 = $Env:ProgramFiles
@@ -134,7 +133,7 @@ function Add-DicePyLibrary {
   $dllPath = Join-Path $BF2Dir "dice_py.dll" -ErrorAction Stop
 
   $vsDevCmd = Get-VSCommandCmd
-  if ($vsDevCmd) {
+  if (!$vsDevCmd) {
     return
   }
   
@@ -149,10 +148,12 @@ function Add-DicePyLibrary {
       $defContent += "    $($symbol) @$($ordinal)"
     }
   }
+  Write-Host "> Created dice_py.def"
 
   $defContent = $defContent -join "`n"
   Set-Content -Path "dice_py.def" -Value $defContent
   cmd.exe /c "`"$vsDevCmd`" -no_logo && lib /NOLOGO /DEF:dice_py.def /OUT:dice_py.lib /MACHINE:x86"
+  Write-Host "> Created dice_py.lib"
 }
 
 function main {
@@ -220,4 +221,10 @@ function main {
     Write-Error "No tool to unzip .tgz files is installed, please manually extract \Include to .\python-$pyVersion from:"
     Write-Error $dlUrl
   }
+}
+
+main -UserBF2Dir $BF2Dir
+if ($Host.Name -eq 'ConsoleHost') {
+  Write-Host "Press any key to continue..."
+  $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyUp") > $null
 }
