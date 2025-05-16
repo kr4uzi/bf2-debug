@@ -1,0 +1,23 @@
+{
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "bf2py",
+			"request": "attach",
+			"name": "Debug BF2 Python",
+			"bf2dir": "${command:extension.bf2py-debug.getBF2Directory}",
+			"bf2args": [],
+			"stopOnEntry": true,
+			"trace": false
+		},
+		{
+			"type": "bf2py",
+			"request": "attach",
+			"name": "Attach BF2",
+			"debugServer": 19021
+		}
+	]
+}
