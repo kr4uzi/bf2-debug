@@ -47,13 +47,13 @@
   },
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onCommand:extension.bf2py-debug.getBF2Directory"
+    "onDebug:bf2py"
   ],
   "contributes": {
     "debuggers": [
       {
         "type": "bf2py",
-        "label": "BF2 Debug",
+        "label": "BF2 Debugger",
         "runtime": "node",
         "configurationAttributes": {
           "launch": {
@@ -64,16 +64,11 @@
               "bf2dir": {
                 "type": "string",
                 "description": "Absolute path to a text file.",
-                "default": "${workspaceFolder}/${command:AskForBF2Directory}"
+                "default": "${command:AskForBF2Directory}"
               },
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Automatically stop after launch.",
-                "default": true
-              },
-              "trace": {
-                "type": "boolean",
-                "description": "Enable logging of the Debug Adapter Protocol.",
                 "default": true
               }
             }
@@ -86,7 +81,7 @@
               "debugServer": {
                 "type": "integer",
                 "description": "The debugger server port",
-                "default": 4711
+                "default": 19021
               },
               "bf2args": {
                 "type": "array",
@@ -96,11 +91,6 @@
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Automatically stop after launch.",
-                "default": true
-              },
-              "trace": {
-                "type": "boolean",
-                "description": "Enable logging of the Debug Adapter Protocol.",
                 "default": true
               }
             }

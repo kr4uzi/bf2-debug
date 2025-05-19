@@ -14,6 +14,8 @@ struct std::hash<dap::integer>
 #include <dap/network.h>
 #include <dap/session.h>
 #include <mutex>
+#include <variant>
+#include <map>
 
 class Event {
 public:
@@ -33,6 +35,7 @@ class debugger : public bdb {
 	std::recursive_mutex mutex;
 	std::condition_variable_any statecv;
 	std::size_t thread_id;
+	bool stopOnEntry;
 
 	enum class Status {
 		Running,
@@ -44,11 +47,13 @@ class debugger : public bdb {
 	PyFrameObject* curframe = nullptr;
 
 	std::unordered_map<dap::integer, PyObject*> var_refs;
+	std::unordered_map<dap::integer, std::variant<std::string, PyFrameObject*>> source_refs;
 	std::unique_ptr<dap::net::Server> server;
 	std::vector<std::shared_ptr<dap::Session>> sessions;
+	std::unordered_map<std::string, std::string> zipcache;
 
 public:
-	debugger();
+	debugger(bool stopOnEntry);
 
 	void start(int port = 19021);
 	void stop();
@@ -66,7 +71,7 @@ private:
 	virtual void user_return(PyFrameObject* frame, PyObject* arg) override;
 	virtual void user_exception(PyFrameObject* frame, PyObject* arg) override;
 	virtual void do_clear(Breakpoint& bp) override;
-	virtual void entry(PyFrameObject* frame) override;
+	virtual void user_entry(PyFrameObject* frame) override;
 
 	void interaction(PyFrameObject* frame, PyObject* traceback);
 	void setup(PyFrameObject* frame, PyObject* traceback);

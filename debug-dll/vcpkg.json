@@ -1,6 +1,7 @@
 {
   "dependencies": [
     "detours",
-    "cppdap"
+    "cppdap",
+    "libzippp"
   ]
 }

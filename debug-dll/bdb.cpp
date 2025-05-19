@@ -1,22 +1,37 @@
 #include "bdb.h"
 #include <print>
 #include <filesystem>
+#include <string_view>
 
+PyObject* (*frame_getlineno)(PyFrameObject*, void*);
 PyObject* quitError = nullptr;
 bool bdb::pyInit()
 {
-    if (quitError) {
+    static bool initialized = false;
+    if (initialized) {
         return true;
     }
 
-	char exceptionName[] = "bf2.BdbQuit";
-	quitError = PyErr_NewException(exceptionName, nullptr, nullptr);
-	if (!quitError) {
-		std::println(stderr, "Failed to create BdbQuit exception");
-		return false;
-	}
-	
-    return true;
+    if (!quitError) {
+        char exceptionName[] = "bf2.BdbQuit";
+        quitError = PyErr_NewException(exceptionName, nullptr, nullptr);
+        if (!quitError) {
+            std::println(stderr, "Failed to create BdbQuit exception");
+        }
+    }
+
+    if (!frame_getlineno) {
+        using namespace std::string_view_literals;
+        for (auto getset = PyFrame_Type.tp_getset; getset && getset->name != nullptr; ++getset) {
+            if (getset->name == "f_lineno"sv) {
+                frame_getlineno = reinterpret_cast<decltype(frame_getlineno)>(getset->get);
+                break;
+            }
+        }
+    }
+
+    initialized = quitError && frame_getlineno;
+    return initialized;
 }
 
 void raiseException(const std::string& message)
@@ -33,6 +48,20 @@ std::string bdb::normalize_path(const std::string& filename)
 	auto path = std::filesystem::absolute(filename).string();
 	std::transform(path.begin(), path.end(), path.begin(), [](auto c) { return std::tolower(c); });
 	return path;
+}
+
+decltype(PyFrameObject::f_lineno) bdb::frame_lineno(PyFrameObject* frame)
+{
+    auto lineno = frame_getlineno(frame, nullptr);
+    return PyInt_AS_LONG(lineno);
+}
+
+void bdb::reset()
+{
+    ignored_frames.clear();
+	mframe = nullptr;
+    stopframe = nullptr;
+    returnframe = nullptr;
 }
 
 std::string bdb::canonic(const std::string& filename)
@@ -63,17 +92,13 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
     auto traceback = reinterpret_cast<_tracebackobject*>(_traceback);
     std::deque<std::pair<PyFrameObject*, std::size_t>> stack;
 
-    // traceback object is not public (traceback.c)
+    // traceback object is not public (traceback.c) and I don't want to bother with C-API calls
     if (traceback && frame == traceback->tb_frame) {
         traceback = traceback->tb_next;
     }
 
     while (frame) {
-        stack.push_front({ frame, PyCode_Addr2Line(frame->f_code, frame->f_lasti) /* frame->f_lineno */ });
-        if (frame == botframe) {
-            break;
-        }
-
+        stack.push_front({ frame, frame_lineno(frame) });
         frame = frame->f_back;
     }
 
@@ -92,23 +117,24 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
 
 int bdb::trace_dispatch(PyFrameObject* frame, int event, PyObject* arg)
 {
-    static bool first = true;
-    if (first) {
-        first = false;
-		entry(frame);
-        return 0;
-    }
-
-
+    std::unique_lock lock(mutex);
     currentbp = nullptr;
     if (quitting) {
         return 0;
     }
     else if (event == PyTrace_CALL) {
         return dispatch_call(frame);
+    } else if (event == PyTrace_RETURN) {
+        if (frame->f_back == nullptr) {
+			// return from the main frame = end of the program
+			reset();
+        }
     }
+    //else if (event == PyTrace_EXCEPTION) {
+    //    return dispatch_exception(frame, arg);
+    //}
     
-    if (frame->f_trace) {
+    if (ignored_frames.contains(frame)) {
         return 0;
     }
 
@@ -126,6 +152,7 @@ int bdb::dispatch_line(PyFrameObject* frame)
 {
     if (stop_here(frame) || break_here(frame)) {
         user_line(frame);
+
         if (quitting) {
             raiseException("quitting");
             return -1;
@@ -137,20 +164,23 @@ int bdb::dispatch_line(PyFrameObject* frame)
 
 int bdb::dispatch_call(PyFrameObject* frame)
 {
-    //if (botframe == nullptr) {
-    //    // First call of dispatch since reset()
-    //    auto first = frame->f_back ? frame->f_back : frame;
-    //    botframe = first;
-    //    return 0;
-    //}
+    if (!mframe) {
+        // first call since last reset
+		mframe = frame;
+    }
 
     if (!(stop_here(frame) || break_anywhere(frame))) {
-        Py_INCREF(Py_None);
-        frame->f_trace = Py_None;
+        ignored_frames.insert(frame);
         return 0;
     }
 
-    user_call(frame);
+    if (frame == mframe) {
+        user_entry(frame);
+    }
+    else {
+        user_call(frame);
+    }
+
 	if (quitting) {
 		raiseException("quitting");
 		return -1;
@@ -172,13 +202,14 @@ int bdb::dispatch_return(PyFrameObject* frame, PyObject* arg)
     return 0;
 }
 
-int bdb::dispatch_exception(PyFrameObject* frame, PyObject* arg)
+int bdb::dispatch_exception(PyFrameObject* frame, PyObject* exec)
 {
     if (stop_here(frame)) {
-        user_exception(frame, arg);
+        user_exception(frame, exec);
+
         if (quitting) {
-			raiseException("quitting");
-			return -1;
+            raiseException("quitting");
+            return -1;
         }
     }
 
@@ -192,8 +223,8 @@ bool bdb::stop_here(PyFrameObject* frame) const
     }
 
     while (frame && frame != stopframe) {
-        if (frame == botframe) {
-            return true;
+        if (frame == mframe) {
+            return step_mframe;
         }
 
         frame = frame->f_back;
@@ -211,8 +242,8 @@ bool bdb::break_here(PyFrameObject* frame)
         return false;
     }
 
-    // f_lineno has a getter in PyFrameObject's tp_getset which 
-    auto lineno = PyCode_Addr2Line(frame->f_code, frame->f_lasti); // frame->f_lineno;
+    // f_lineno has a getter in PyFrameObject's tp_getset 
+    auto lineno = frame_lineno(frame); // frame->f_lineno;
     if (lineno < 0) {
         return false;
     }
@@ -285,6 +316,15 @@ bool bdb::break_here(PyFrameObject* frame)
     return false;
 }
 
+bool bdb::is_cought(PyFrameObject* frame, PyObject* exec)
+{
+    for (auto f = frame; f; f = f->f_back) {
+        if (f->f_iblock > 0) {
+            return true;
+        }
+    }
+}
+
 bool bdb::break_anywhere(PyFrameObject* frame)
 {
     const auto filename = canonic(PyString_AsString(frame->f_code->co_filename));
@@ -294,13 +334,18 @@ bool bdb::break_anywhere(PyFrameObject* frame)
 
 void bdb::set_step()
 {
-    stopframe = nullptr;
+	step_mframe = true;
+    stopframe = mframe;
     returnframe = nullptr;
     quitting = false;
 }
 
 void bdb::set_next(PyFrameObject* frame)
 {
+    if (frame == mframe) {
+		step_mframe = true;
+    }
+
     stopframe = frame;
     returnframe = nullptr;
     quitting = false;
@@ -315,14 +360,16 @@ void bdb::set_return(PyFrameObject* frame)
 
 void bdb::set_continue()
 {
-    stopframe = botframe;
+	step_mframe = false;
+    stopframe = nullptr;
     returnframe = nullptr;
     quitting = false;
 }
 
 void bdb::set_quit()
 {
-    stopframe = botframe;
+    //stopframe = botframe;
+	stopframe = nullptr;
     returnframe = nullptr;
     quitting = true;
     PyEval_SetTrace(nullptr, nullptr);

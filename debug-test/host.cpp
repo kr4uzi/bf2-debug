@@ -13,12 +13,53 @@ PyObject* log_write(PyObject* self, PyObject* args)
 	return Py_None;
 }
 
+PyObject* pmgr_getPlayers(PyObject* self, PyObject* args)
+{
+	return PyList_New(0);
+}
+
+PyObject* registerHandler(PyObject* self, PyObject* args)
+{
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyObject* registerGameStatusHandler(PyObject* self, PyObject* args)
+{
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyObject* sgl_setParam(PyObject* self, PyObject* args)
+{
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyObject* sgl_getParam(PyObject* self, PyObject* args)
+{
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyObject* sgl_getIsAIGame(PyObject* self, PyObject* args)
+{
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyObject* ss_getParam(PyObject* self, PyObject* args)
+{
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
 PyMethodDef host_methods[] = {
 	{ (char*)"log", log_write, METH_VARARGS, nullptr },
 	// rcon_invoke
 	// rcon_feedback
 	// pmgr_getNumberOfPlayers
-	// pmgr_getPlayers
+	{ (char*)"pmgr_getPlayers", pmgr_getPlayers, METH_VARARGS, nullptr },
 	// pmgr_getCommander
 	// pmgr_isIndexValid
 	// pmgr_p_get
@@ -30,19 +71,19 @@ PyMethodDef host_methods[] = {
 	// timer_getTimers
 	// timer_created
 	// timer_destroy
-	// registerHandler
-	// registerGameStatusHandler
+	{ (char*)"registerHandler", registerHandler, METH_VARARGS, nullptr },
+	{ (char*)"registerGameStatusHandler", registerGameStatusHandler, METH_VARARGS, nullptr },
 	// unregisterGameStatusHandler
 	// omgr_getObjectsOfType
 	// omgr_getObjectsOfTemplate
 	// sgl_getModDirectory
 	// sgl_getMapName
 	// sgl_getWorldSize
-	// sgl_setParam
-	// sgl_getParam
+	{ (char*)"sgl_setParam", sgl_setParam, METH_VARARGS, nullptr },
+	{ (char*)"sgl_getParam", sgl_getParam, METH_VARARGS, nullptr },
 	// sgl_endGame
 	// sgl_getControlPointsInGroup
-	// sgl_getIsAIGame
+	{ (char*)"sgl_getIsAIGame", sgl_getIsAIGame, METH_VARARGS, nullptr },
 	// sgl_sendGameLogicEvent
 	// sgl_sendPythonEvent
 	// sgl_sendMedalEvent
@@ -50,7 +91,7 @@ PyMethodDef host_methods[] = {
 	// sgl_sendHudEvent
 	// sgl_sendTextMessage
 	// gl_sendEndOfRoundData
-	// ss_getParam
+	{ (char*)"ss_getParam", ss_getParam, METH_VARARGS, nullptr },
 	// sgl_getSettingsBool
 	// sh_setEnableCommander
 	// pers_plrAwardMedal
@@ -72,10 +113,8 @@ PyMethodDef host_methods[] = {
 
 bool init_host(FARPROC pyInitModule4)
 {
-	typedef PyObject* (*pyInitModule4_func)(char*, PyMethodDef*, char*, PyObject*, int);
-	static_assert(std::is_same_v<pyInitModule4_func, decltype(&Py_InitModule4)>, "Py_InitModule4 signatures must match");
-	auto res = reinterpret_cast<PyObject* (*)(char*, PyMethodDef*, char*, PyObject*, int)>(pyInitModule4)(
-		(char*)"host", host_methods, nullptr, nullptr, PYTHON_API_VERSION
-	);
+	using init_t = std::decay_t<decltype(Py_InitModule4)>;
+	char moduleName[] = "host";
+	auto res = reinterpret_cast<init_t>(pyInitModule4)(moduleName, host_methods, nullptr, nullptr, PYTHON_API_VERSION);
 	return res != nullptr;
 }

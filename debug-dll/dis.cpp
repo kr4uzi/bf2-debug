@@ -1,5 +1,5 @@
 #include "dis.h"
-#include "../python/opcode.h"
+#include <opcode.h>
 #include <set>
 #include <unordered_map>
 #include <algorithm>

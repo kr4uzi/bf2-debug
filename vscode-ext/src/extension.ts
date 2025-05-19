@@ -4,32 +4,51 @@ import { spawn } from 'child_process';
 
 export function activate(context: vscode.ExtensionContext) {
 
-	context.subscriptions.push(vscode.commands.registerCommand('extension.bf2py-debug.getBF2Directory', async config => {
-		let bf2Dir = "C:\\Program Files (x86)\\EA Games\\Battlefield 2 Server";
-		if (process.platform === 'win32') {
-			const paths = {
-				'HKEY_LOCAL_MACHINE\\SOFTWARE\\EA GAMES\\Battlefield 2 Server': 'GAMEDIR',
-				'HKEY_LOCAL_MACHINE\\SOFTWARE\\Electronic Arts\\EA Games\\Battlefield 2': 'InstallDir'
-			};
-
-			const values = await regedit.arch.list32(Object.keys(paths));
-			for (const [key, item] of Object.entries(values)) {
-				if (item.exists) {
-					bf2Dir = item.values[paths[key]].value as string;
-					break;
+	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('bf2py', {
+		provideDebugConfigurations(folder: vscode.WorkspaceFolder | undefined): vscode.ProviderResult<vscode.DebugConfiguration[]> {
+			return [
+				{
+					name: "Launch1",
+					request: "launch",
+					type: "bf2py"
+				},
+				{
+					name: "Attach1",
+					request: "attach",
+					type: "bf2py"
 				}
-			}
-		} else {
-			bf2Dir = "/home/bf2server"
+			];
 		}
+	}, vscode.DebugConfigurationProviderTriggerKind.Dynamic));
 
-		return vscode.window.showInputBox({
-			placeHolder: "Please enter the Battlefield 2 (Server) directory",
-			value: bf2Dir
-		});
-	}));
+    context.subscriptions.push(
+		vscode.commands.registerCommand('extension.bf2py-debug.getBF2Directory', async config => {
+			let bf2Dir = "C:\\Program Files (x86)\\EA Games\\Battlefield 2 Server";
+			if (process.platform === 'win32') {
+				const paths = {
+					'HKEY_LOCAL_MACHINE\\SOFTWARE\\EA GAMES\\Battlefield 2 Server': 'GAMEDIR',
+					'HKEY_LOCAL_MACHINE\\SOFTWARE\\Electronic Arts\\EA Games\\Battlefield 2': 'InstallDir'
+				};
 
-	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('mock', new BF2PyConfigurationProvider()));
+				const values = await regedit.arch.list32(Object.keys(paths));
+				for (const [key, item] of Object.entries(values)) {
+					if (item.exists) {
+						bf2Dir = item.values[paths[key]].value as string;
+						break;
+					}
+				}
+			} else {
+				bf2Dir = "/home/bf2server"
+			}
+
+			return vscode.window.showInputBox({
+				placeHolder: "Please enter the Battlefield 2 (Server) directory",
+				value: bf2Dir
+			});
+		})
+	);
+
+	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('bf2py', new BF2PyConfigurationProvider()));
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('bf2py', new BF2DebugAdapterServerDescriptorFactory()));
 }
 
@@ -38,14 +57,16 @@ export function deactivate() {
 }
 
 class BF2PyConfigurationProvider implements vscode.DebugConfigurationProvider {
-	async resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): vscode.ProviderResult<vscode.DebugConfiguration> {
-		
+	resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): vscode.ProviderResult<vscode.DebugConfiguration> {
+		vscode.window.showInformationMessage("BF2PyConfigurationProvider");
 		if (config.request == "launch" && !config.bf2dir) {
-			await vscode.window.showInformationMessage("Cannot Launch BF2");
-			return;
+			return vscode.window.showInformationMessage("Cannot Launch BF2").then(_ => {
+				return undefined;	// abort launch
+			});
 		} else if (config.request == "attach" && !config.debugServer) {
-			await vscode.window.showInformationMessage("Cannot Attach to BF2");
-			return; 
+			return vscode.window.showInformationMessage("Cannot Attach to BF2").then(_ => {
+				return undefined;	// abort launch
+			});
 		}
 
 		return config;

@@ -53,7 +53,7 @@ function Get-BattlefieldDirectory {
     $bf2Dir = $browser.SelectedPath
   }
 
-  if (Test-Path "$bf2Dir\\dice_py.dll") {
+  if (Test-Path (Join-Path $bf2Dir "dice_py.dll")) {
     Write-Host "> Using Battlefield 2 Directory: $bf2Dir"
     return $bf2Dir
   }
@@ -96,7 +96,7 @@ function Get-VSCommandCmd {
   }
 
   Write-Host "Detecting Visual Studio installation ..."
-  $programFilesX86 = ${env:ProgramFiles(x86)}
+  $programFilesX86 = $Env:ProgramFiles(x86)
   if (-not $programFilesX86) {
     $programFilesX86 = $Env:ProgramFiles
   }
@@ -195,7 +195,7 @@ function main {
     }
   }
 
-  $dlPath = "$env:TEMP\Python-$pyVersion.tgz"
+  $dlPath = Join-Path $Env:TEMP "Python-$pyVersion.tgz"
   if (Test-Path $dlPath) {
     Write-Output "Using pre-downloaded source archive"
   }
@@ -205,12 +205,12 @@ function main {
     Write-Output "Downloading python headers from official source for detected version: $pyVersion"
     Invoke-WebRequest "$dlUrl" -OutFile $dlPath -ErrorAction Stop
 
-    tar -xzf $dlPath -C $env:TEMP
+    tar -xzf $dlPath -C $Env:TEMP
     if (Test-Path -Path ".\python-$pyVersion") {
       Remove-Item -Path ".\python-$pyVersion" -Recurse
     }
 
-    $unzipDir = Join-Path $env:TEMP "Python-$pyVersion"
+    $unzipDir = Join-Path $Env:TEMP "Python-$pyVersion"
     Move-Item -Path "$unzipDir\Include" -Destination ".\python-$pyVersion"
     Move-Item -Path "$unzipDir\PC\pyconfig.h" -Destination ".\python-$pyVersion\pyconfig.h"
     # Remove-Item is unable to remove certain the files in Mac/IDE, only rmdir seems to work
@@ -224,7 +224,7 @@ function main {
 }
 
 main -UserBF2Dir $BF2Dir
-if ($Host.Name -eq 'ConsoleHost') {
-  Write-Host "Press any key to continue..."
+if ($Host.Name -eq "ConsoleHost") {
+  Write-Host "Press any key to exit..."
   $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyUp") > $null
 }
