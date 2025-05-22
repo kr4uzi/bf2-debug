@@ -41,6 +41,7 @@ void debugger::stop()
 void debugger::user_entry(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
 {
     if (stopOnEntry) {
+        std::println("Waiting for debugger to attach ...");
         statecv.wait(lock, [&] { return !sessions.empty(); });
         stopOnEntry = false;
 

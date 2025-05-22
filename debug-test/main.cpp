@@ -66,8 +66,17 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 	auto pi = ::PROCESS_INFORMATION{};
 	DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED | DEBUG_PROCESS;
 	std::vector<const char*> dlls;
-	for (const auto& dll : injectDlls)
+	bool hasDebugDll = false;
+	for (const auto& dll : injectDlls) {
 		dlls.push_back(dll.c_str());
+		if (dll.ends_with("bf2py-debug.dll")) {
+			hasDebugDll = true;
+		}
+	}
+
+	if (!hasDebugDll) {
+		dlls.push_back("bf2py-debug.dll");
+	}
 	
 	std::string commandLine;
 	for (const auto& arg : bf2args) {
@@ -173,9 +182,12 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 	}
 
 	if (!debugDll) {
-		std::println("bf2py-debug.dll must be injected");
-		print_usage(procName);
-		return 1;
+		debugDll = ::LoadLibraryA("bf2py-debug.dll");
+		if (!debugDll) {
+			std::println("bf2py-debug.dll must be injected");
+			print_usage(procName);
+			return 1;
+		}
 	}
 
 	auto pyInitialize = GetProcAddress(debugDll, "pyInitialize");

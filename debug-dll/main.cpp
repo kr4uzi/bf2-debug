@@ -93,8 +93,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 
     if (dwReason == DLL_PROCESS_ATTACH) {
         std::string cmd = GetCommandLineA();
-        bool stopOnEntry = cmd.contains("+pyDebugStopOnEntry=1");
-        g_debug.reset(new debugger(stopOnEntry));
+        bool dontStopOnEntry = cmd.contains("+pyDebugStopOnEntry=0");
+        g_debug.reset(new debugger(!dontStopOnEntry));
         g_debug->start();
 
         DetourRestoreAfterWith();
