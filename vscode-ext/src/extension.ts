@@ -1,91 +1,103 @@
 import * as vscode from 'vscode';
-import { promisified as regedit } from 'regedit';
-import { spawn } from 'child_process';
+import * as child_process from 'child_process';
+import * as path from 'path';
 
 export function activate(context: vscode.ExtensionContext) {
+	vscode.debug.onDidReceiveDebugSessionCustomEvent(event => {
+		if (event.event == "bf2py" && event.body.type == "modpath") {
+			// replace or add the mods/mod/python folder
+			const folders = vscode.workspace.workspaceFolders;
 
-	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('bf2py', {
-		provideDebugConfigurations(folder: vscode.WorkspaceFolder | undefined): vscode.ProviderResult<vscode.DebugConfiguration[]> {
-			return [
-				{
-					name: "Launch1",
-					request: "launch",
-					type: "bf2py"
-				},
-				{
-					name: "Attach1",
-					request: "attach",
-					type: "bf2py"
-				}
-			];
-		}
-	}, vscode.DebugConfigurationProviderTriggerKind.Dynamic));
+			const [base, mod]: string[] = event.body.data.toLowerCase().split(";");
+			let updated = false;
+			if (!folders?.find(f => f.uri.fsPath.toLowerCase().startsWith(base))) {
+				vscode.workspace.updateWorkspaceFolders(0, undefined, {
+					uri: vscode.Uri.joinPath(vscode.Uri.file(base), "python"),
+					name: "bf2/python"
+				}, {
+					uri: vscode.Uri.joinPath(vscode.Uri.file(base), "admin"),
+					name: "admin"
+				});
 
-    context.subscriptions.push(
-		vscode.commands.registerCommand('extension.bf2py-debug.getBF2Directory', async config => {
-			let bf2Dir = "C:\\Program Files (x86)\\EA Games\\Battlefield 2 Server";
-			if (process.platform === 'win32') {
-				const paths = {
-					'HKEY_LOCAL_MACHINE\\SOFTWARE\\EA GAMES\\Battlefield 2 Server': 'GAMEDIR',
-					'HKEY_LOCAL_MACHINE\\SOFTWARE\\Electronic Arts\\EA Games\\Battlefield 2': 'InstallDir'
-				};
-
-				const values = await regedit.arch.list32(Object.keys(paths));
-				for (const [key, item] of Object.entries(values)) {
-					if (item.exists) {
-						bf2Dir = item.values[paths[key]].value as string;
-						break;
-					}
-				}
-			} else {
-				bf2Dir = "/home/bf2server"
+				updated = true;
 			}
 
-			return vscode.window.showInputBox({
-				placeHolder: "Please enter the Battlefield 2 (Server) directory",
-				value: bf2Dir
+			const modUri = vscode.Uri.joinPath(vscode.Uri.file(base), mod);
+			const modIndex = folders?.findIndex(f => f.uri == modUri) || -1;
+			updated = updated || modIndex != -1;
+			vscode.workspace.updateWorkspaceFolders(modIndex != -1 ? modIndex : 0, modIndex != -1 ? 1 : 0, {
+				uri: modUri,
+				name: mod
 			});
-		})
-	);
+		}
+	});
 
-	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('bf2py', new BF2PyConfigurationProvider()));
-	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('bf2py', new BF2DebugAdapterServerDescriptorFactory()));
+	vscode.debug.registerDebugAdapterDescriptorFactory('bf2py', new BF2Py());
 }
 
 export function deactivate() {
 	// nothing to do
 }
 
-class BF2PyConfigurationProvider implements vscode.DebugConfigurationProvider {
-	resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): vscode.ProviderResult<vscode.DebugConfiguration> {
-		vscode.window.showInformationMessage("BF2PyConfigurationProvider");
-		if (config.request == "launch" && !config.bf2dir) {
-			return vscode.window.showInformationMessage("Cannot Launch BF2").then(_ => {
-				return undefined;	// abort launch
-			});
-		} else if (config.request == "attach" && !config.debugServer) {
-			return vscode.window.showInformationMessage("Cannot Attach to BF2").then(_ => {
-				return undefined;	// abort launch
-			});
+class BF2Py implements vscode.DebugAdapterDescriptorFactory
+{
+	bf2Path: string = "";
+
+	getBF2PathFromRegistry(): string {
+		const paths = {
+			"HKLM\\SOFTWARE\\EA GAMES\\Battlefield 2 Server": "GAMEDIR",
+			"HKLM\\SOFTWARE\\Electronic Arts\\EA Games\\Battlefield 2": "InstallDir"
+		};
+
+		for (const [path, key] of Object.entries(paths)) {
+			try {
+				const out = child_process.execSync(`reg query "${path}" /reg:32 /v "${key}"`, { stdio: ['ignore', 'pipe', 'ignore'] });
+				const matches = out.toString().match(/REG_SZ\s+(.+)$/m);
+				if (matches) {
+					return matches[1];
+				}
+			} catch (e) {
+
+			}
 		}
 
-		return config;
+		return "";
 	}
-}
 
-class BF2DebugAdapterServerDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
-	createDebugAdapterDescriptor(session: vscode.DebugSession, executable: vscode.DebugAdapterExecutable | undefined): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
-		if (session.configuration.request == "attach") {
-			return new vscode.DebugAdapterServer(session.configuration.debugPort);
+	async resolveBF2Path() {
+		let bf2Path = '';
+		if (process.platform == 'win32') {
+			bf2Path = this.getBF2PathFromRegistry() || "C:\\Program Files (x86)\\EA Games\\Battlefield 2 Server";
+		} else {
+			bf2Path = "/home/bf2server";
 		}
-		else if (session.configuration.request == "launch") {
-			const subprocess = spawn('with_dll', ['bf2_w32ded', ...session.configuration.bf2args, '+debugPython'], {
-				cwd: session.configuration.bf2dir,
-				detached: true,
-				stdio: 'ignore',
+
+		this.bf2Path = await vscode.window.showInputBox({
+			placeHolder: "Please enter the Battlefield 2 (Server) directory",
+			value: bf2Path
+		}) || "";
+		return this.bf2Path;
+	}
+
+	createDebugAdapterDescriptor(session: vscode.DebugSession): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
+		const dapPort = 19021;
+		session.configuration.dapPort ??= dapPort;
+
+		const request = session.configuration.request;
+		if (request == "attach") {
+			return new vscode.DebugAdapterServer(session.configuration.dapPort);
+		} else if (request == "launch") {
+			return this.resolveBF2Path().then((bf2Path) => {
+				const subprocess = child_process.spawnSync(path.join("..", "debug-launcher"), session.configuration.bf2args);
+				if (subprocess.pid) {
+					return new vscode.DebugAdapterServer(session.configuration.dapPort);
+				} else {
+					vscode.window.showErrorMessage("Failed to launch debug-launcher: " + request);
+				}
 			});
 		}
-
-		return new vscode.DebugAdapterServer(4711);
+			
+		vscode.window.showErrorMessage("Invalid bf2py request: " + request);
+		return null;
 	}
 }

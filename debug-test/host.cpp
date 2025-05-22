@@ -30,6 +30,11 @@ PyObject* registerGameStatusHandler(PyObject* self, PyObject* args)
 	return Py_None;
 }
 
+PyObject* sgl_getModDirectory(PyObject* self, PyObject* args)
+{
+	return PyString_FromString("mods/bf2");
+}
+
 PyObject* sgl_setParam(PyObject* self, PyObject* args)
 {
 	Py_INCREF(Py_None);
@@ -54,12 +59,19 @@ PyObject* ss_getParam(PyObject* self, PyObject* args)
 	return Py_None;
 }
 
+#if PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION < 7
+// const-ness was added in python 2.7
+#define BF2PY_METHOD_NAME(name) (char*)name
+#else
+#define BF2PY_METHOD_NAME(name) name
+#endif
+
 PyMethodDef host_methods[] = {
-	{ (char*)"log", log_write, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("log"), log_write, METH_VARARGS, nullptr },
 	// rcon_invoke
 	// rcon_feedback
 	// pmgr_getNumberOfPlayers
-	{ (char*)"pmgr_getPlayers", pmgr_getPlayers, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("pmgr_getPlayers"), pmgr_getPlayers, METH_VARARGS, nullptr },
 	// pmgr_getCommander
 	// pmgr_isIndexValid
 	// pmgr_p_get
@@ -71,19 +83,19 @@ PyMethodDef host_methods[] = {
 	// timer_getTimers
 	// timer_created
 	// timer_destroy
-	{ (char*)"registerHandler", registerHandler, METH_VARARGS, nullptr },
-	{ (char*)"registerGameStatusHandler", registerGameStatusHandler, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("registerHandler"), registerHandler, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("registerGameStatusHandler"), registerGameStatusHandler, METH_VARARGS, nullptr },
 	// unregisterGameStatusHandler
 	// omgr_getObjectsOfType
 	// omgr_getObjectsOfTemplate
-	// sgl_getModDirectory
+	{ BF2PY_METHOD_NAME("sgl_getModDirectory"), sgl_getModDirectory, METH_VARARGS, nullptr },
 	// sgl_getMapName
 	// sgl_getWorldSize
-	{ (char*)"sgl_setParam", sgl_setParam, METH_VARARGS, nullptr },
-	{ (char*)"sgl_getParam", sgl_getParam, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("sgl_setParam"), sgl_setParam, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("sgl_getParam"), sgl_getParam, METH_VARARGS, nullptr },
 	// sgl_endGame
 	// sgl_getControlPointsInGroup
-	{ (char*)"sgl_getIsAIGame", sgl_getIsAIGame, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("sgl_getIsAIGame"), sgl_getIsAIGame, METH_VARARGS, nullptr },
 	// sgl_sendGameLogicEvent
 	// sgl_sendPythonEvent
 	// sgl_sendMedalEvent
@@ -91,7 +103,7 @@ PyMethodDef host_methods[] = {
 	// sgl_sendHudEvent
 	// sgl_sendTextMessage
 	// gl_sendEndOfRoundData
-	{ (char*)"ss_getParam", ss_getParam, METH_VARARGS, nullptr },
+	{ BF2PY_METHOD_NAME("ss_getParam"), ss_getParam, METH_VARARGS, nullptr },
 	// sgl_getSettingsBool
 	// sh_setEnableCommander
 	// pers_plrAwardMedal

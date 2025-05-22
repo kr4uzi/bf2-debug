@@ -27,6 +27,9 @@
     <ClCompile Include="dis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="debugger_session.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bdb.h">
@@ -35,13 +38,13 @@
     <ClInclude Include="breakpoint.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="debugger.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="python.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="dis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="debugger.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

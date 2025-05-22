@@ -105,6 +105,7 @@
   <ItemGroup>
     <ClCompile Include="bdb.cpp" />
     <ClCompile Include="debugger.cpp" />
+    <ClCompile Include="debugger_session.cpp" />
     <ClCompile Include="dis.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>

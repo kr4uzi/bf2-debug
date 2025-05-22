@@ -203,6 +203,10 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 		&pyFinalize, [](FARPROC* fn) { py_err_print(); reinterpret_cast<void(*)()>(*fn)(); }
 	);
 
+	if (PyRun_SimpleString("import sys\nsys.path = ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']")) {
+		py_err_print();
+	}
+
 	if (!init_host(pyInitModule4)) {
 		return 1;
 	}
@@ -224,10 +228,8 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 
 bool init_bf2()
 {
-	auto initStr = std::format("import sys\nsys.path = ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']");
-	PyRun_SimpleString(initStr.c_str());
-
-	auto bf2Module = PyImport_ImportModule((char*)"bf2");
+	char moduleName[] = "bf2";
+	auto bf2Module = PyImport_ImportModule(moduleName);
 	if (!bf2Module) {
 		std::println("Failed to import bf2 module");
 		return false;

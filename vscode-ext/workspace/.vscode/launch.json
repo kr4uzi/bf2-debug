@@ -6,18 +6,16 @@
 	"configurations": [
 		{
 			"type": "bf2py",
-			"request": "attach",
-			"name": "Debug BF2 Python",
-			"bf2dir": "${command:extension.bf2py-debug.getBF2Directory}",
+			"request": "launch",
+			"name": "Launch BF2 PyDebug",
 			"bf2args": [],
-			"stopOnEntry": true,
-			"trace": false
+			"stopOnEntry": true
 		},
 		{
 			"type": "bf2py",
 			"request": "attach",
-			"name": "Attach BF2",
-			"debugServer": 19021
+			"name": "Attach BF2 PyDebug",
+			"dapPort": 19021
 		}
 	]
 }

@@ -27,12 +27,12 @@ function Get-BattlefieldDirectory {
 
   if (!$bf2Dir) {
     Write-Host "Checking Battlefield 2 Server Installation ..."
-    $bf2Dir = Get-RegistryKey32Value -Path "HKEY_LOCAL_MACHINE\SOFTWARE\EA GAMES\Battlefield 2 Server" -Name "GAMEDIR"
+    $bf2Dir = Get-RegistryKey32Value -Path "HKLM\SOFTWARE\EA GAMES\Battlefield 2 Server" -Name "GAMEDIR"
   }
 
   if (!$bf2Dir) {
     Write-Host "Checking Battlefield 2 Client Installation ..."
-    $bf2Dir = Get-RegistryKey32Value -Path "HKEY_LOCAL_MACHINE\SOFTWARE\Electronic Arts\EA Games\Battlefield 2" -Name "InstallDir"
+    $bf2Dir = Get-RegistryKey32Value -Path "HKLM\SOFTWARE\Electronic Arts\EA Games\Battlefield 2" -Name "InstallDir"
   }
 
   if (!$bf2Dir) {
