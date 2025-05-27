@@ -44,7 +44,7 @@ function Get-BattlefieldDirectory {
     Add-Type -AssemblyName System.Windows.Forms
     $browser = New-Object System.Windows.Forms.FolderBrowserDialog
     $browser.ShowNewFolderButton = $false
-    $browser.SelectedPath = $Env:Programfiles
+    $browser.SelectedPath = ${env:Programfiles}
     $browser.Description = "This PowerShell Script will check the python version of the dice_py.dll. Please select the Battlefield 2 install directory."
     if ($browser.ShowDialog() -ne "OK") {
       return
@@ -96,9 +96,9 @@ function Get-VSCommandCmd {
   }
 
   Write-Host "Detecting Visual Studio installation ..."
-  $programFilesX86 = $Env:ProgramFiles(x86)
+  $programFilesX86 = ${env:ProgramFiles(x86)}
   if (-not $programFilesX86) {
-    $programFilesX86 = $Env:ProgramFiles
+    $programFilesX86 = ${env:ProgramFiles}
   }
 
   $vsWherePath = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -195,7 +195,7 @@ function main {
     }
   }
 
-  $dlPath = Join-Path $Env:TEMP "Python-$pyVersion.tgz"
+  $dlPath = Join-Path ${env:TEMP} "Python-$pyVersion.tgz"
   if (Test-Path $dlPath) {
     Write-Output "Using pre-downloaded source archive"
   }
@@ -205,12 +205,12 @@ function main {
     Write-Output "Downloading python headers from official source for detected version: $pyVersion"
     Invoke-WebRequest "$dlUrl" -OutFile $dlPath -ErrorAction Stop
 
-    tar -xzf $dlPath -C $Env:TEMP
+    tar -xzf $dlPath -C ${env:TEMP}
     if (Test-Path -Path ".\python-$pyVersion") {
       Remove-Item -Path ".\python-$pyVersion" -Recurse
     }
 
-    $unzipDir = Join-Path $Env:TEMP "Python-$pyVersion"
+    $unzipDir = Join-Path ${env:TEMP} "Python-$pyVersion"
     Move-Item -Path "$unzipDir\Include" -Destination ".\python-$pyVersion"
     Move-Item -Path "$unzipDir\PC\pyconfig.h" -Destination ".\python-$pyVersion\pyconfig.h"
     # Remove-Item is unable to remove certain the files in Mac/IDE, only rmdir seems to work

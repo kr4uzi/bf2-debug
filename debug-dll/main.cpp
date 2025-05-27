@@ -1,3 +1,4 @@
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <detours/detours.h>
 #include "python.h"
@@ -73,9 +74,9 @@ static_assert(std::is_same_v<decltype(bf2_Py_InitModule4), decltype(&pyInitModul
 
 extern "C" __declspec(dllexport) void pyFinalize()
 {
-    PyEval_SetTrace(nullptr, nullptr);
     if (g_debug) {
         g_debug->stop();
+        g_debug->disable_trace();
     }
 
     bf2_Py_Finalize();

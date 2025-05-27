@@ -1,95 +1,123 @@
 #include "debugger.h"
-#include <thread>
-#include <dap/io.h>
-#include <dap/protocol.h>
 #include <print>
 
-void Event::wait() {
-    std::unique_lock lock(mutex);
-    cv.wait(lock, [&] { return fired; });
-}
-
-void Event::fire() {
-    std::unique_lock lock(mutex);
-    fired = true;
-    cv.notify_all();
-}
-
 debugger::debugger(bool stopOnEntry)
-	: thread_id(std::hash<std::thread::id>{}(std::this_thread::get_id())), stopOnEntry(stopOnEntry), last_source_id(1)
+    : _thread_id(std::hash<std::thread::id>{}(std::this_thread::get_id())), _wait_for_connection(stopOnEntry)
 {
-	server = dap::net::Server::create();
-	if (!server) {
-		std::println("Failed to create server");
-		return;
-	}
+
 }
 
-void debugger::setHostModule(const decltype(hostModule)& _hostModule)
+int debugger::trace_dispatch(PyFrameObject* frame, int event, PyObject* arg)
 {
-    std::unique_lock lock(mutex);
-    hostModule = _hostModule;
-    // any session already configured hasn't yet received the mod path
-    send_mod_path();
+    if (trace_ignore()) {
+        // when evaluating (e.g. a breakpoint condition) or quitting, there is no need for any additional overhead
+        return bdb::trace_dispatch(frame, event, arg);
+    }
+
+    return asio::post(_ctx, asio::use_future([&] {
+        return bdb::trace_dispatch(frame, event, arg);
+    })).get();
+}
+
+void debugger::setHostModule(const decltype(_hostModule)& hostModule)
+{
+    _hostModule = hostModule;
+
+    if (_session) {
+        auto it = _hostModule.find("sgl_getModDirectory");
+        if (it != _hostModule.end()) {
+            auto modDir = it->second(nullptr, nullptr);
+            _session->send_modpath(std::format("{};{}", std::filesystem::current_path().string(), PyString_AS_STRING(modDir)));
+        }
+    }
+}
+
+void debugger::start(asio::ip::port_type port)
+{
+    asio::co_spawn(_ctx, run(port), asio::detached);
+    start_io_runner();
 }
 
 void debugger::stop()
 {
-    server->stop();
+    _ctx.stop();
 }
 
-void debugger::user_entry(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
+asio::awaitable<void> debugger::run(asio::ip::port_type port)
 {
-    if (stopOnEntry) {
+    asio::ip::tcp::acceptor acceptor{ _ctx, asio::ip::tcp::endpoint{ asio::ip::make_address_v4("127.0.0.1"), port}};
+    while (acceptor.is_open()) {
+        auto [error, socket] = co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
+        if (error)
+            break;
+
+        // only one session at a time
+        _session.emplace(*this, std::move(socket));
+        co_await _session->run();
+    }
+}
+
+void debugger::start_io_runner()
+{
+    _runner = std::jthread([&](std::stop_token stop) {
+        while (!stop.stop_requested() && !_ctx.stopped()) {
+            _ctx.run_one();
+        }
+    });
+}
+
+void debugger::user_entry(PyFrameObject* frame)
+{
+    if (_wait_for_connection) {
         std::println("Waiting for debugger to attach ...");
-        statecv.wait(lock, [&] { return !sessions.empty(); });
-        stopOnEntry = false;
 
-        dap::StoppedEvent event;
-        event.reason = "entry";
-        event.threadId = thread_id;
-        send(event);
+        while (!_session || !_session->initialized()) {
+			_ctx.run_one();
+        }
 
-        interaction(lock, frame, nullptr);
+        _wait_for_connection = false;
+        _session->send_entry(_thread_id);
+        interaction(frame, nullptr);
     }
 }
 
-void debugger::user_call(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
+void debugger::user_call(PyFrameObject* frame)
 {
+    if (!_session) {
+        return;
+    }
+    
     if (stop_here(frame)) {
-        dap::StoppedEvent event;
-        event.threadId = thread_id;
-        event.reason = "step";
-        send(event);
-
-        interaction(lock, frame, nullptr);
+		_session->send_step(_thread_id);
+        interaction(frame, nullptr);
     }
 }
 
-void debugger::user_line(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
+void debugger::user_line(PyFrameObject* frame)
 {
-    dap::StoppedEvent event;
-    event.threadId = thread_id;
-    event.reason = "step";
-	send(event);
+    if (!_session) {
+        return;
+    }
 
-    interaction(lock, frame, nullptr);
+    _session->send_step(_thread_id);
+    interaction(frame, nullptr);
 }
 
-void debugger::user_return(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg)
+void debugger::user_return(PyFrameObject* frame, PyObject* arg)
 {
+    if (!_session) {
+        return;
+    }
+
     if (frame->f_locals) {
         PyDict_SetItemString(frame->f_locals, "__return__", arg);
     }
 
-    dap::StoppedEvent event;
-	event.threadId = thread_id;
-    event.reason = "step";
-    send(event);
-    interaction(lock, frame, nullptr);
+    _session->send_step(_thread_id);
+    interaction(frame, nullptr);
 }
 
-void debugger::user_exception(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg)
+void debugger::user_exception(PyFrameObject* frame, PyObject* arg)
 {
     PyObject* type = PyTuple_GET_ITEM(arg, 0);
     PyObject* value = PyTuple_GET_ITEM(arg, 1);
@@ -108,17 +136,13 @@ void debugger::user_exception(std::unique_lock<std::mutex>& lock, PyFrameObject*
     }
 
     if (valueRepr && typeStr) {
-        dap::StoppedEvent event;
-        event.threadId = thread_id;
-        event.reason = "exception";
-        event.text = std::format("{}: {}", PyString_AsString(typeStr), PyString_AsString(valueRepr));
-        send(event);
+        _session->send_exception(_thread_id, std::format("{}: {}", PyString_AsString(typeStr), PyString_AsString(valueRepr)));
     }
 
     Py_XDECREF(typeStr);
     Py_XDECREF(valueRepr);
 
-    interaction(lock, frame, traceback);
+    interaction(frame, traceback);
 }
 
 void debugger::on_breakpoint_error(Breakpoint& bp, const std::string& message)
@@ -126,30 +150,34 @@ void debugger::on_breakpoint_error(Breakpoint& bp, const std::string& message)
     log(std::format("breakpoint eval error: {}\n", message));
 }
 
-void debugger::forget()
+void debugger::interaction(PyFrameObject* frame, PyObject* traceback)
 {
-    var_refs.clear();
-	source_refs.clear();
-	stack.clear();
-	curindex = 0;
-	curframe = nullptr;
+    setup(frame, traceback);
+    _state = Status::Stopped;
+    
+    while (_state == Status::Stopped) {
+        _ctx.run_one();
+    }
+
+    forget();
 }
 
 void debugger::setup(PyFrameObject* frame, PyObject* traceback)
 {
     forget();
-	std::tie(stack, curindex) = get_stack(frame, traceback);
-	curframe = stack[curindex].first;
+    std::tie(_stack, _curindex) = get_stack(frame, traceback);
+    _curframe = _stack[_curindex].first;
 }
 
-void debugger::interaction(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* traceback)
+void debugger::forget()
 {
-    if (!sessions.empty()) {
-	    setup(frame, traceback);
-        state = Status::Stopped;
-        statecv.wait(lock, [&] { return state == Status::Running; });
-        forget();
-    }
+	if (_session) {
+		_session->forget(_thread_id);
+	}
+
+    _stack.clear();
+    _curindex = 0;
+    _curframe = nullptr;
 }
 
 void debugger::do_clear(Breakpoint& bp)
@@ -159,8 +187,7 @@ void debugger::do_clear(Breakpoint& bp)
 
 void debugger::log(const std::string& msg)
 {
-    dap::OutputEvent event;
-	event.category = "console";
-	event.output = msg;
-    send(event);
+    if (_session) {
+        _session->send_output(msg);
+    }
 }

@@ -110,9 +110,11 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="asio.h" />
     <ClInclude Include="bdb.h" />
     <ClInclude Include="breakpoint.h" />
     <ClInclude Include="debugger.h" />
+    <ClInclude Include="debugger_session.h" />
     <ClInclude Include="dis.h" />
     <ClInclude Include="python.h" />
   </ItemGroup>

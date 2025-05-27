@@ -29,7 +29,8 @@ if not exist "%bf2dir%\bf2_w32ded.exe" (
 REM check if VS Code installation is in PATH
 where code >nul 2>nul
 if %errorlevel% == 0 (
-  code --extensionDevelopmentPath="%~dp0vscode-ext" "vscode-ext/workspace"
+  echo Waiting for VS Code to quit ...
+  code --extensionDevelopmentPath="%~dp0vscode-ext" "vscode-ext\\workspace"
   goto :exit
 )
 

@@ -1,4 +1,5 @@
 #pragma once
+#define HAVE_SNPRINTF
 #pragma warning(push)
 // remove warnings about register members
 #pragma warning(disable:5033)
