@@ -5,7 +5,6 @@
     <BF2_DIR>C:\Program Files (x86)\EA Games\Battlefield 2 Server</BF2_DIR>
     <BF2_PY_VERSION>2.3.4</BF2_PY_VERSION>
   </PropertyGroup>
-  <PropertyGroup />
   <ItemDefinitionGroup>
     <ClCompile>
       <PreprocessorDefinitions>BF2_PY_VERSION=2.3.4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -25,4 +24,10 @@
       <EnvironmentVariable>true</EnvironmentVariable>
     </BuildMacro>
   </ItemGroup>
+  <PropertyGroup>
+    <LocalDebuggerCommand>$(OutDir)debug-test.exe</LocalDebuggerCommand>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+    <LocalDebuggerCommandArguments>-inject="$(TargetPath)" -mode=dry</LocalDebuggerCommandArguments>
+    <LocalDebuggerWorkingDirectory>$(BF2_DIR)</LocalDebuggerWorkingDirectory>
+  </PropertyGroup>
 </Project>
