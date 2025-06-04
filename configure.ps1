@@ -142,7 +142,7 @@ function Add-DicePyLibrary {
   $defContent += "LIBRARY dice_py"
   $defContent += "EXPORTS"
   foreach ($line in $dumpbinOutput -split "`n") {
-    if ($line -match "^\s*(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)\s*$") {
+    if ($line -match "^\s*(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(.+)$") {
       $ordinal = $Matches[1]
       $symbol = $Matches[2]
       $defContent += "    $($symbol) @$($ordinal)"
@@ -150,7 +150,7 @@ function Add-DicePyLibrary {
   }
   Write-Host "> Created dice_py.def"
 
-  $defContent = $defContent -join "`n"
+  $defContent = $defContent -join "`r`n"
   Set-Content -Path "dice_py.def" -Value $defContent
   cmd.exe /c "`"$vsDevCmd`" -no_logo && lib /NOLOGO /DEF:dice_py.def /OUT:dice_py.lib /MACHINE:x86"
   Write-Host "> Created dice_py.lib"
@@ -165,7 +165,9 @@ function main {
   $props = $bf2Props.Project.PropertyGroup | Where-Object { $_.Label -eq "UserMacros" }
   $bf2Dir = Get-BattlefieldDirectory -InitialValue $props.BF2_DIR -UserBF2Dir $UserBF2Dir
   if (!$bf2Dir) {
-    Write-Host "No Battlefield 2 Directory detected or slected. Aborting..."
+    Write-Host "No Battlefield 2 Directory detected or slected."
+    Write-Host "Please manually configure the path in bf2.props"
+    Write-Host " Aborting..."
     return
   }
 

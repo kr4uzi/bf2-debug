@@ -5,6 +5,8 @@
 #include <map>
 #include <vector>
 #include <span>
+#include <print>
+#include <format>
 
 int HAVE_ARGUMENT = -1;
 int EXTENDED_ARG = -1;
@@ -20,7 +22,7 @@ std::unordered_map<int, std::string> opname;
 
 bool dist_init()
 {
-    if (PyRun_SimpleString("import sys\nsys.path = ['pylib-" PY_VERSION ".zip']")) {
+    if (PyRun_SimpleString("import sys\nsys.path = ['pylib-2.3.4.zip']")) {
         PyErr_Print();
         return false;
     }
@@ -112,6 +114,10 @@ std::vector<int> findlabels(const std::span<char>& code)
         auto op = code[i];
         i++;
         if (op >= HAVE_ARGUMENT) {
+            if ((i + 1) >= code.size()) {
+                // code path is only chosen if HAVE_ARGUMENT is not initialized (which doesn't happen if dist_init was called)
+                break;
+            }
             auto oparg = code[i] + code[i + 1] * 256;
             i += 2;
             auto label = -1;

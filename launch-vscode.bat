@@ -27,10 +27,16 @@ if not exist "%bf2dir%\bf2_w32ded.exe" (
 
 :launchvscode
 REM check if VS Code installation is in PATH
+if exist "%temp%\bf2py-data" (
+  rmdir /s /q "%temp%\bf2py-data"
+)
+
+mkdir "%temp%\bf2py-data"
+
 where code >nul 2>nul
 if %errorlevel% == 0 (
   echo Waiting for VS Code to quit ...
-  code --extensionDevelopmentPath="%~dp0vscode-ext" "vscode-ext\\workspace"
+  code --disable-workspace-trust --user-data-dir="%temp%\bf2py-data" --extensions-dir="%temp%\bf2py-data" --extensionDevelopmentPath="%~dp0vscode-ext" "vscode-ext\workspace"
   goto :exit
 )
 
@@ -49,7 +55,10 @@ if not defined vscodePath (
   goto :exit
 )
 
-"%vscodePath%" --extensionDevelopmentPath=%~dp0vscode-ext "vscode-ext/workspace"
+"%vscodePath%" --disable-workspace-trust --user-data-dir="%temp%\bf2py-data" --extensions-dir="%temp%\bf2py-data" --extensionDevelopmentPath=%~dp0vscode-ext "vscode-ext/workspace"
 :exit
+if exist "%temp%\bf2py-data" (
+  rmdir /s /q "%temp%\bf2py-data"
+)
 endlocal
 exit /b 0

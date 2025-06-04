@@ -10,6 +10,7 @@
 #include <libzippp/libzippp.h>
 
 std::hash<PyObject*> pyObjectHash{};
+std::hash<PyFrameObject*> pyFrameObjectHash{};
 std::hash<std::string> filenameHash{};
 using namespace nlohmann;
 debugger_session::debugger_session(debugger& debugger, asio::ip::tcp::socket socket)
@@ -80,21 +81,6 @@ asio::awaitable<void> debugger_session::run()
 					co_await handle_configurationDone(packet);
 				}
 				else if (command == "threads") {
-					// TODO: the enable_trace should not be called on the debugger itself, instead here (and if wait_on_entry=true)
-					// in addition, the PyThread_start_new_thread and PyThread_exit_thread should be overwritten so that we can send an thread event
-					// or should i overwrite PyThreadState_New? not sure. if threading is enabled a new threadstate will start a new thread automatically,
-					// but PyEval_SetTrace will only register on the current thread state and if a python code creates new threads, does this mean that
-					// on those, the Trace wont work?
-					// on pause do we need PyGILState_Ensure?
-					
-					
-					for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
-						std::println("interpreter {}", (void*)interpreter);
-						for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
-							std::println("thread {}", (void*)thread);
-							// enable_trace
-						}
-					}
 					co_await handle_threads(packet);
 				}
 				else if (command == "stackTrace") {
@@ -248,6 +234,7 @@ void debugger_session::forget(std::uint32_t threadId)
 {
 	_var_refs.clear();
 	_source_refs.clear();
+	_frame_refs.clear();
 }
 
 asio::awaitable<void> debugger_session::handle_initialize(const json& packet)
@@ -277,28 +264,49 @@ asio::awaitable<void> debugger_session::handle_configurationDone(const json& pac
 
 asio::awaitable<void> debugger_session::handle_threads(const json& packet)
 {
+	auto threads = json::array();
+	
+	for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
+		for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+			threads.push_back({
+				{ "id", thread->thread_id },
+				{ "name", std::format("bf2 ({})", thread->thread_id) }
+				});
+		}
+	}
+
 	co_await async_send_response(packet, {
-			{ "threads", json::array({
-					{ { "id", _debugger.thread_id() }, { "name", "bf2" } } }
-				)}
+		{ "threads", threads }
 		});
 }
 
 asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
 {
 	const auto threadId = packet["arguments"]["threadId"].get<std::uint32_t>();
-	if (threadId != _debugger.thread_id()) {
+	PyFrameObject* frame = nullptr;
+	if (threadId == _debugger.current_thread()) {
+		frame = _debugger.current_frame();
+	}
+	else {
+		for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
+			for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+				if (thread->thread_id == threadId) {
+					frame = thread->frame;
+					break;
+				}
+			}
+		}
+	}
+
+	if (frame == nullptr) {
 		co_await async_send_response(packet, {
-				{ "error", std::format("Invalid threadId '{}'", threadId) }
+			{ "error", std::format("Invalid threadId '{}'", threadId) }
 			}, false);
 		co_return;
 	}
 
 	auto stackFrames = json::array();
-	std::uint32_t frameId = 0;
-
-	for (const auto& s : std::views::reverse(_debugger.stack())) {
-		auto frame = s.first;
+	for (std::uint32_t frameId = 1; frame; frame = frame->f_back, frameId++) {
 		assert(frame->f_code && "f_code is never NULL");
 
 		auto source = json::object();
@@ -317,25 +325,26 @@ asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
 			source["path"] = filename;
 		}
 
+		_frame_refs[frameId] = frame;
 		stackFrames.push_back({
-				{ "id", frameId++ },
-				{ "name", PyString_AsString(frame->f_code->co_name) },
-				{ "line", s.second },
-				{ "column", 1 },
-				{ "source", source }
+			{ "id", frameId },
+			{ "name", PyString_AsString(frame->f_code->co_name) },
+			{ "line", frame->f_lineno },
+			{ "column", 1 },
+			{ "source", source }
 			});
 	}
 
 	co_await async_send_response(packet, {
-			{ "stackFrames", stackFrames }
+		{ "stackFrames", stackFrames }
 		});
 }
 
 asio::awaitable<void> debugger_session::handle_scopes(const json& packet)
 {
-	const auto& stack = _debugger.stack();
 	const auto frameId = packet["arguments"]["frameId"].get<std::uint32_t>();
-	if (frameId > stack.size()) {
+	const auto it = _frame_refs.find(frameId);
+	if (it == _frame_refs.end()) {
 		co_await async_send_response(packet, {
 			{ "error", std::format("Invalid frameId '{}'", frameId) }
 			}, false);
@@ -343,7 +352,7 @@ asio::awaitable<void> debugger_session::handle_scopes(const json& packet)
 	}
 
 	auto scopes = json::array();
-	const auto& frame = stack[frameId].first;
+	const auto& frame = it->second;
 	if (frame->f_locals) {
 		const auto refId = pyObjectHash(frame->f_locals);
 		scopes.push_back({

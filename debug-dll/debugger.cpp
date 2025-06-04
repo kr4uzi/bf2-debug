@@ -2,7 +2,7 @@
 #include <print>
 
 debugger::debugger(bool stopOnEntry)
-    : _thread_id(std::hash<std::thread::id>{}(std::this_thread::get_id())), _wait_for_connection(stopOnEntry)
+    : _wait_for_connection(stopOnEntry)
 {
 
 }
@@ -76,7 +76,7 @@ void debugger::user_entry(PyFrameObject* frame)
         }
 
         _wait_for_connection = false;
-        _session->send_entry(_thread_id);
+        _session->send_entry(frame->f_tstate->thread_id);
         interaction(frame, nullptr);
     }
 }
@@ -88,7 +88,7 @@ void debugger::user_call(PyFrameObject* frame)
     }
     
     if (stop_here(frame)) {
-		_session->send_step(_thread_id);
+		_session->send_step(frame->f_tstate->thread_id);
         interaction(frame, nullptr);
     }
 }
@@ -99,7 +99,7 @@ void debugger::user_line(PyFrameObject* frame)
         return;
     }
 
-    _session->send_step(_thread_id);
+    _session->send_step(frame->f_tstate->thread_id);
     interaction(frame, nullptr);
 }
 
@@ -113,7 +113,7 @@ void debugger::user_return(PyFrameObject* frame, PyObject* arg)
         PyDict_SetItemString(frame->f_locals, "__return__", arg);
     }
 
-    _session->send_step(_thread_id);
+    _session->send_step(frame->f_tstate->thread_id);
     interaction(frame, nullptr);
 }
 
@@ -136,7 +136,7 @@ void debugger::user_exception(PyFrameObject* frame, PyObject* arg)
     }
 
     if (valueRepr && typeStr) {
-        _session->send_exception(_thread_id, std::format("{}: {}", PyString_AsString(typeStr), PyString_AsString(valueRepr)));
+        _session->send_exception(frame->f_tstate->thread_id, std::format("{}: {}", PyString_AsString(typeStr), PyString_AsString(valueRepr)));
     }
 
     Py_XDECREF(typeStr);
@@ -167,17 +167,19 @@ void debugger::setup(PyFrameObject* frame, PyObject* traceback)
     forget();
     std::tie(_stack, _curindex) = get_stack(frame, traceback);
     _curframe = _stack[_curindex].first;
+    _curthread = frame->f_tstate->thread_id;
 }
 
 void debugger::forget()
 {
 	if (_session) {
-		_session->forget(_thread_id);
+		_session->forget(_curthread);
 	}
 
     _stack.clear();
     _curindex = 0;
     _curframe = nullptr;
+    _curthread = -1;
 }
 
 void debugger::do_clear(Breakpoint& bp)

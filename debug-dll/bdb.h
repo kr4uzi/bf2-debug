@@ -9,7 +9,6 @@
 
 class bdb
 {
-    PyThreadState* _py_thread = nullptr;
     std::set<PyFrameObject*> _ignored_frames;
     bool _evaling = false;
     bool _step = false;
@@ -28,6 +27,8 @@ public:
         ALL_EXCEPTIONS = 3
     };
 
+    static std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> get_stack(PyFrameObject* frame, PyObject* traceback);
+
 protected:
     bool _quitting = false;
     Breakpoint* _currentbp = nullptr;
@@ -45,7 +46,6 @@ protected:
 
     void reset();
     void raiseException(const std::string& message);
-	std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> get_stack(PyFrameObject* frame, PyObject* traceback);
 
 public:
     bdb();
@@ -53,7 +53,7 @@ public:
 
     static bool pyInit();
 
-    void enable_trace();
+    void trace_thread(PyThreadState* tstate);
     void disable_trace();
     bool trace_ignore() const { return _evaling || _quitting; }
 

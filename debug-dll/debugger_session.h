@@ -14,6 +14,7 @@ class debugger_session
 	asio::ip::tcp::socket _socket;
 	bool _initialized = false;
 
+	std::unordered_map<std::uint32_t, PyFrameObject*> _frame_refs;
 	std::unordered_map<std::uint32_t, PyObject*> _var_refs;
 	std::uint32_t _last_source_id = 1;
 	std::unordered_map<std::uint32_t, std::string> _source_cache;

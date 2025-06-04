@@ -6,6 +6,19 @@
 namespace {
     bdb* debugger = nullptr;
     PyObject* quit_error = nullptr;
+
+    // like PyCapsule (which doesn't exist in python 2.3.4)
+    typedef struct {
+        PyObject_HEAD
+        bdb* debugger;
+    } bf2PyDebugger;
+
+    PyTypeObject bf2PyDebuggerType = {
+        PyObject_HEAD_INIT(&PyType_Type)
+        0,                           /*ob_size*/
+        BF2PY_CSTR("bf2py.Debugger"),/*tp_name*/
+        sizeof(bf2PyDebugger),       /*tp_basicsize*/
+    };
 }
 
 void bdb::raiseException(const std::string& message)
@@ -25,33 +38,39 @@ bdb::~bdb()
 
 bool bdb::pyInit()
 {
-    if (quit_error) {
-        return true;
+    if (quit_error == nullptr) {
+        char name[] = "bf2.BdbQuit";
+        quit_error = PyErr_NewException(name, nullptr, nullptr);
     }
 
-    char exceptionName[] = "bf2.BdbQuit";
-    quit_error = PyErr_NewException(exceptionName, nullptr, nullptr);
     if (!quit_error) {
         std::println(stderr, "Failed to create BdbQuit exception");
     }
 
-    return !!quit_error;
-}
-
-void bdb::enable_trace()
-{
-    if (debugger) {
-        return;
+    static bool typeInitialized = false;
+    if (!typeInitialized) {
+        typeInitialized = PyType_Ready(&bf2PyDebuggerType) == 0;
     }
 
-    debugger = this;
-    _py_thread = PyThreadState_Get();
+    if (!typeInitialized) {
+        std::println(stderr, "Failed to initialize bf2py debugger type");
+    }
 
-    // as we only trace a single thread, we only have once trace function and can therefore
-    // save the conversion cost of PyCObject_FromVoidPtr and PyCObject_AsVoidPtr
-    PyEval_SetTrace([](PyObject* obj, PyFrameObject* frame, int event, PyObject* arg) -> int {
-        return debugger->trace_dispatch(frame, event, arg);
-    }, nullptr);
+    return !!quit_error && typeInitialized;
+}
+
+void bdb::trace_thread(PyThreadState* tstate)
+{
+    if (Py_IsInitialized()) {
+        bf2PyDebugger* self;
+        self = PyObject_NEW(bf2PyDebugger, &bf2PyDebuggerType);
+        self->debugger = this;
+        tstate->use_tracing = true;
+        tstate->c_traceobj = reinterpret_cast<PyObject*>(self);
+        tstate->c_tracefunc = [](PyObject* obj, PyFrameObject* frame, int event, PyObject* arg) -> int {
+            return reinterpret_cast<bf2PyDebugger*>(obj)->debugger->trace_dispatch(frame, event, arg);
+            };
+    }
 }
 
 void bdb::disable_trace()
@@ -62,10 +81,16 @@ void bdb::disable_trace()
         // the debugger might be destructed after Py_Finalize was called,
         // in this case we must not call any more Py* functions
         if (Py_IsInitialized()) {
-            // PyEval_SetTrace might have been registered on a thread that 
-            auto currThread = PyThreadState_Swap(_py_thread);
-            PyEval_SetTrace(nullptr, nullptr);
-            PyThreadState_Swap(currThread);
+            // disable trace on all previously traced threads
+            for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
+                for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+                    if (thread->c_traceobj && Py_TYPE(thread->c_traceobj) == &bf2PyDebuggerType) {
+                        auto currThread = PyThreadState_Swap(thread);
+                        PyEval_SetTrace(nullptr, nullptr);
+                        PyThreadState_Swap(currThread);
+                    }
+                }
+            }
         }
     }
 }
@@ -141,6 +166,7 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
             traceback->tb_lineno
         });
         traceback = traceback->tb_next;
+        std::println("traceback!");
     }
 
     return { stack, i };

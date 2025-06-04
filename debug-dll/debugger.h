@@ -15,9 +15,10 @@ public:
 		Stopped
 	};
 
+	using thread_id_t = decltype(PyThreadState::thread_id);
+
 private:
 	asio::io_context _ctx;
-	std::uint32_t _thread_id;
 	bool _wait_for_connection;
 	std::jthread _runner;
 	std::optional<debugger_session> _session;
@@ -27,6 +28,7 @@ private:
 	std::deque<std::pair<PyFrameObject*, std::size_t>> _stack;
 	std::size_t _curindex = 0;
 	PyFrameObject* _curframe = nullptr;
+	thread_id_t _curthread = -1;
 
 	std::map<std::string, PyCFunction> _hostModule;
 
@@ -47,12 +49,12 @@ public:
 		log(std::vformat(fmt, std::make_format_args(args...)));
 	}
 
-	std::uint32_t thread_id() const { return _thread_id; }
 	const auto& stack() const { return _stack; }
 	auto& breaks() { return _breaks; }
 	const auto& current_frame() const { return _curframe; }
+	const auto& current_thread() const { return _curthread; }
 	auto state() const { return _state; }
-	void state(decltype(_state) state) { _state = state; }
+	void state(decltype(_state) state) { _state = state; }	
 
 private:
 	asio::awaitable<void> run(asio::ip::port_type port);

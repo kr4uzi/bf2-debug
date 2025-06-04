@@ -7,18 +7,21 @@
 #include "debugger.h"
 #include "dis.h"
 
+bool pyInitializing = true;
 LONG commitError = 0;
 auto bf2_Py_Initialize = ::Py_Initialize;
 auto bf2_Py_InitModule4 = ::Py_InitModule4;
 auto bf2_Py_Finalize = ::Py_Finalize;
 auto bf2_PyErr_PrintEx = ::PyErr_PrintEx;
+auto bf2_PyThreadState_New = ::PyThreadState_New;
 std::unique_ptr<debugger> g_debug = nullptr;
 
-extern "C" __declspec(dllexport) void pyInitialize()
+void pyInitialize()
 {
     // before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
+
     bf2_Py_Initialize();
-    // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']
+    pyInitializing = false;
 
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
@@ -30,7 +33,7 @@ extern "C" __declspec(dllexport) void pyInitialize()
 		return;
     }
 
-    g_debug->enable_trace();
+    // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']
 }
 static_assert(std::is_same_v<decltype(bf2_Py_Initialize), decltype(&pyInitialize)>, "bf2 and pydebug Py_Initialize signature must match");
 
@@ -52,7 +55,11 @@ PyObject* logWrite(PyObject* self, PyObject* args)
     return Py_None;
 }
 
-extern "C" __declspec(dllexport) PyObject* pyInitModule4(char* name, PyMethodDef* methods, char* doc, PyObject* self, int apiver)
+#if PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION < 7
+PyObject* pyInitModule4(char* name, PyMethodDef* methods, char* doc, PyObject* self, int apiver)
+#else
+PyObject* pyInitModule4(const char* name, PyMethodDef* methods, const char* doc, PyObject* self, int apiver)
+#endif
 {
 	if (strcmp(name, "host") == 0) {
         bf2_logWrite = methods[0].ml_meth;
@@ -72,7 +79,7 @@ extern "C" __declspec(dllexport) PyObject* pyInitModule4(char* name, PyMethodDef
 }
 static_assert(std::is_same_v<decltype(bf2_Py_InitModule4), decltype(&pyInitModule4)>, "bf2 and pydebug Py_InitModule4 signature must match");
 
-extern "C" __declspec(dllexport) void pyFinalize()
+void pyFinalize()
 {
     if (g_debug) {
         g_debug->stop();
@@ -82,6 +89,19 @@ extern "C" __declspec(dllexport) void pyFinalize()
     bf2_Py_Finalize();
 }
 static_assert(std::is_same_v<decltype(bf2_Py_Finalize), decltype(&pyFinalize)>, "bf2 and pydebug Py_Finalize signature must match");
+
+auto pyThreadState_New(PyInterpreterState* interp)
+{
+    auto tstate = bf2_PyThreadState_New(interp);
+
+    if (g_debug && !pyInitializing) {
+        // do not trace the initialization sequence (at least the dis-function requires access to an available opcodes module)
+        g_debug->trace_thread(tstate);
+    }
+
+    return tstate;
+}
+static_assert(std::is_same_v<decltype(bf2_PyThreadState_New), decltype(&pyThreadState_New)>, "bf2 and pydebug PyThreadState_New signature must match");
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
@@ -100,6 +120,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 
         DetourRestoreAfterWith();
         DetourTransactionBegin();
+        DetourAttach((PVOID*)&bf2_PyThreadState_New, pyThreadState_New);
         DetourAttach((PVOID*)&bf2_Py_Initialize, pyInitialize);
         DetourAttach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
         DetourAttach((PVOID*)&bf2_Py_Finalize, pyFinalize);
@@ -116,6 +137,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
             DetourDetach((PVOID*)&bf2_Py_Finalize, pyFinalize);
             DetourDetach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
             DetourDetach((PVOID*)&bf2_Py_Initialize, pyInitialize);
+            DetourDetach((PVOID*)&bf2_PyThreadState_New, pyThreadState_New);
             commitError = DetourTransactionCommit();
         }
     }
