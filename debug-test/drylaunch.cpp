@@ -16,13 +16,6 @@ void py_err_print()
 bool init_bf2();
 int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 {
-#if 0
-	if (!load_py()) {
-		std::println("failed to load dice_py.dll");
-		return 1;
-	}
-#endif
-
 	HMODULE debugDll = nullptr;
 	for (const auto& path : injectDlls) {
 		auto dll = ::LoadLibraryA(path.c_str());
@@ -38,19 +31,19 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 
 	if (!debugDll) {
 		debugDll = ::LoadLibraryA("bf2py-debug.dll");
-		if (!debugDll) {
-			std::println("bf2py-debug.dll must be injected");
-			print_usage(procName);
-			return 1;
-		}
 	}
 
-	//Py_NoSiteFlag = 1;
+	if (!debugDll) {
+		std::println("no bf2py-debug.dll found");
+	}
+
+	Py_NoSiteFlag = 1;
 	Py_Initialize();
 	auto finalizer = std::unique_ptr<nullptr_t, void(*)(nullptr_t*)>(
 		nullptr, [](nullptr_t*) { py_err_print(); Py_Finalize(); }
 	);
 
+	// on lunch, the bf2 executable sets the detected mod path
 	if (PyRun_SimpleString("import sys\nsys.path = ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']")) {
 		py_err_print();
 	}
@@ -59,6 +52,8 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 		return 1;
 	}
 
+	// strange behaviour when debugpy 1.5.1 was launched: lots of debug-test.exe were spawned
+	// taskkill /F /IM debug-test.exe
 	if (!init_bf2()) {
 		return 1;
 	}

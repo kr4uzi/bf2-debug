@@ -31,14 +31,14 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 		commandLine += std::format(" {}", ss.str());
 	}
 
-	auto res = ::DetourCreateProcessWithDllsA("bf2_w32ded.exe", commandLine.data(), nullptr, nullptr, FALSE, dwFlags, nullptr, bf2Path.empty() ? nullptr : bf2Path.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
+	auto exePath = std::format("{}\\{}", bf2Path.empty() ? "." : bf2Path, "bf2_w32ded.exe");
+	auto res = ::DetourCreateProcessWithDllsA(exePath.c_str(), commandLine.empty() ? nullptr : commandLine.data(), nullptr, nullptr, FALSE, dwFlags, nullptr, bf2Path.empty() ? nullptr : bf2Path.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
 	if (!res) {
 		std::println("failed to create process");
 		return -1;
 	}
 
 	ResumeThread(pi.hThread);
-
 	DEBUG_EVENT debugEvent;
 	std::string lastMessage;
 	std::size_t repCount = 0;
@@ -55,6 +55,28 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			else {
 				continueEvent = DBG_EXCEPTION_NOT_HANDLED;
 				message = std::format("Exception caught in PID: {}, Code: {:#x}", debugEvent.dwProcessId, debugEvent.u.Exception.ExceptionRecord.ExceptionCode);
+			}
+		}
+		else if (event == LOAD_DLL_DEBUG_EVENT) {
+			auto& dllInfo = debugEvent.u.LoadDll;
+			if (dllInfo.hFile) {
+				DWORD tmp[1 + 1024 / 2];
+				if (GetFileInformationByHandleEx(dllInfo.hFile, FileNameInfo, tmp, sizeof tmp) == 0) {
+					std::println("failed to get file information for dll handle");
+					break;
+				}
+
+				char buf[MAX_PATH * 2];
+				FILE_NAME_INFO* info = (FILE_NAME_INFO*)tmp;
+				int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, info->FileName, info->FileNameLength / 2, buf, sizeof(buf) - 1, NULL, NULL);
+				if (n == 0) {
+					std::println("WideCharToMultiByte failed");
+					break;
+				}
+				buf[n] = '\0';
+				message = std::format("loading {}", buf);
+
+				CloseHandle(dllInfo.hFile);
 			}
 		}
 		else if (event == OUTPUT_DEBUG_STRING_EVENT) {
@@ -91,11 +113,15 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			}
 		}
 
-		ContinueDebugEvent(
+		auto res = ContinueDebugEvent(
 			debugEvent.dwProcessId,
 			debugEvent.dwThreadId,
 			continueEvent
 		);
+		if (!res) {
+			std::println("failed to sent continue event: {}", GetLastError());
+			break;
+		}
 	}
 	// WaitForSingleObject(pi.hProcess, INFINITE);
 

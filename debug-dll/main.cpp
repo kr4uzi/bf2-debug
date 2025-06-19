@@ -18,7 +18,7 @@ std::unique_ptr<debugger> g_debug = nullptr;
 
 void pyInitialize()
 {
-    // before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
+    // note: before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
 
     bf2_Py_Initialize();
     pyInitializing = false;
@@ -34,6 +34,7 @@ void pyInitialize()
     }
 
     // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']
+	// any initializeation done here which depends on python modules need to do their own path initialization
 }
 static_assert(std::is_same_v<decltype(bf2_Py_Initialize), decltype(&pyInitialize)>, "bf2 and pydebug Py_Initialize signature must match");
 
@@ -92,6 +93,7 @@ static_assert(std::is_same_v<decltype(bf2_Py_Finalize), decltype(&pyFinalize)>, 
 
 auto pyThreadState_New(PyInterpreterState* interp)
 {
+    std::println("pyThreadState_New {}", (void*)interp);
     auto tstate = bf2_PyThreadState_New(interp);
 
     if (g_debug && !pyInitializing) {

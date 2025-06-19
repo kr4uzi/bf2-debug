@@ -29,6 +29,8 @@ int main(int argc, char* argv[])
 			std::println("Please copy this file to the Battlefield 2 (Server) directory and try again.");
 			return 1;
 		}
+
+		std::println("starting bf2 from {}", bf2Path);
 	}
 
 	run_bf2(argv[0], dlls, bf2Path, otherArgs);
