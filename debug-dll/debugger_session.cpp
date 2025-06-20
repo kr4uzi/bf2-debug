@@ -265,12 +265,11 @@ asio::awaitable<void> debugger_session::handle_configurationDone(const json& pac
 asio::awaitable<void> debugger_session::handle_threads(const json& packet)
 {
 	auto threads = json::array();
-	
 	for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
 		for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
 			threads.push_back({
 				{ "id", thread->thread_id },
-				{ "name", std::format("bf2 ({})", thread->thread_id) }
+				{ "name", !thread->next ? "bf2 (main)" : std::format("bf2 ({})", thread->thread_id)}
 				});
 		}
 	}

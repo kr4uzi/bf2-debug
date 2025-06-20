@@ -52,8 +52,6 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 		return 1;
 	}
 
-	// strange behaviour when debugpy 1.5.1 was launched: lots of debug-test.exe were spawned
-	// taskkill /F /IM debug-test.exe
 	if (!init_bf2()) {
 		return 1;
 	}

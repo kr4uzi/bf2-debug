@@ -23,14 +23,12 @@ void pyInitialize()
     bf2_Py_Initialize();
     pyInitializing = false;
 
+    auto tstate = PyThreadState_GET();
+    g_debug->trace_thread(tstate);
+
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
         return;
-    }
-
-    if (!dist_init()) {
-		std::println("Failed to initialize disassembler");
-		return;
     }
 
     // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']

@@ -1,8 +1,8 @@
 #include "debugger.h"
 #include <print>
 
-debugger::debugger(bool stopOnEntry)
-    : _wait_for_connection(stopOnEntry)
+debugger::debugger(bool stopOnEntry, asio::ip::port_type port)
+    : _wait_for_connection(stopOnEntry), _port(port)
 {
 
 }
@@ -32,9 +32,9 @@ void debugger::setHostModule(const decltype(_hostModule)& hostModule)
     }
 }
 
-void debugger::start(asio::ip::port_type port)
+void debugger::start()
 {
-    asio::co_spawn(_ctx, run(port), asio::detached);
+    asio::co_spawn(_ctx, run(), asio::detached);
     start_io_runner();
 }
 
@@ -43,9 +43,9 @@ void debugger::stop()
     _ctx.stop();
 }
 
-asio::awaitable<void> debugger::run(asio::ip::port_type port)
+asio::awaitable<void> debugger::run()
 {
-    asio::ip::tcp::acceptor acceptor{ _ctx, asio::ip::tcp::endpoint{ asio::ip::make_address_v4("127.0.0.1"), port}};
+    asio::ip::tcp::acceptor acceptor{ _ctx, asio::ip::tcp::endpoint{ asio::ip::make_address_v4("127.0.0.1"), _port}};
     while (acceptor.is_open()) {
         auto [error, socket] = co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
         if (error)
@@ -69,7 +69,7 @@ void debugger::start_io_runner()
 void debugger::user_entry(PyFrameObject* frame)
 {
     if (_wait_for_connection) {
-        std::println("Waiting for debugger to attach ...");
+        std::println("Waiting for debugger to attach on {} ...", _port);
 
         while (!_session || !_session->initialized()) {
 			_ctx.run_one();

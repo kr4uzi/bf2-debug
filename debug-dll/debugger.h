@@ -19,6 +19,7 @@ public:
 
 private:
 	asio::io_context _ctx;
+	asio::ip::port_type _port;
 	bool _wait_for_connection;
 	std::jthread _runner;
 	std::optional<debugger_session> _session;
@@ -33,13 +34,13 @@ private:
 	std::map<std::string, PyCFunction> _hostModule;
 
 public:
-	debugger(bool stopOnEntry);
+	debugger(bool stopOnEntry, asio::ip::port_type port = 19021);
 
 	virtual int trace_dispatch(PyFrameObject* frame, int event, PyObject* arg);
 
 	void setHostModule(const decltype(_hostModule)& _hostModule);
 
-	void start(asio::ip::port_type port = 19021);
+	void start();
 	void stop();
 
 	void log(const std::string& msg);
@@ -57,7 +58,7 @@ public:
 	void state(decltype(_state) state) { _state = state; }	
 
 private:
-	asio::awaitable<void> run(asio::ip::port_type port);
+	asio::awaitable<void> run();
 	void start_io_runner();
 
 	virtual void user_entry(PyFrameObject* frame) override;
