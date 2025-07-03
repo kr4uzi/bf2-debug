@@ -25,7 +25,7 @@ void pyInitialize()
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
         return;
-    }
+    }   
 
     g_debug->enable_trace();
 

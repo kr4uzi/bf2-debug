@@ -5,6 +5,7 @@
 #include <format>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
 
 int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, const std::string& bf2Path, const std::vector<std::string>& bf2args)
 {
@@ -12,16 +13,22 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 	auto pi = ::PROCESS_INFORMATION{};
 	DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED | DEBUG_PROCESS;
 	std::vector<const char*> dlls;
+	std::vector<std::string> normalizedDlls;
 	bool hasDebugDll = false;
 	for (const auto& dll : injectDlls) {
-		dlls.push_back(dll.c_str());
 		if (dll.ends_with("bf2py-debug.dll")) {
 			hasDebugDll = true;
 		}
+
+		auto dllPath = std::filesystem::absolute(dll);
+		normalizedDlls.push_back(dllPath.string());
+		dlls.push_back(normalizedDlls.back().c_str());
 	}
 
 	if (!hasDebugDll) {
-		dlls.push_back("bf2py-debug.dll");
+		auto dllPath = std::filesystem::absolute("bf2py-debug.dll");
+		normalizedDlls.push_back(dllPath.string());
+		dlls.push_back(normalizedDlls.back().c_str());
 	}
 
 	std::string commandLine;
@@ -32,7 +39,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 	}
 
 	auto exePath = std::format("{}\\{}", bf2Path.empty() ? "." : bf2Path, "bf2_w32ded.exe");
-	auto res = ::DetourCreateProcessWithDllsA(exePath.c_str(), commandLine.empty() ? nullptr : commandLine.data(), nullptr, nullptr, FALSE, dwFlags, nullptr, bf2Path.empty() ? nullptr : bf2Path.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
+	auto res = ::DetourCreateProcessWithDllsA(exePath.c_str(), commandLine.data(), nullptr, nullptr, FALSE, dwFlags, nullptr, bf2Path.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
 	if (!res) {
 		std::println("failed to create process");
 		return -1;
@@ -53,7 +60,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 				message = "breakpoint";
 			}
 			else {
-				continueEvent = DBG_EXCEPTION_NOT_HANDLED;
+				//continueEvent = DBG_EXCEPTION_NOT_HANDLED;
 				message = std::format("Exception caught in PID: {}, Code: {:#x}", debugEvent.dwProcessId, debugEvent.u.Exception.ExceptionRecord.ExceptionCode);
 			}
 		}
@@ -80,6 +87,8 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			}
 		}
 		else if (event == OUTPUT_DEBUG_STRING_EVENT) {
+			// TODO: this does not yet properly set the message (bytes are reserved, but the length is never set, as such the string is always empty)
+			// use a fixed buffer instead and then assign it to message?
 			auto& strInfo = debugEvent.u.DebugString;
 			auto numBytes = strInfo.nDebugStringLength * (strInfo.fUnicode ? sizeof(wchar_t) : sizeof(char));
 			message.reserve(numBytes);
@@ -123,9 +132,9 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			break;
 		}
 	}
-	// WaitForSingleObject(pi.hProcess, INFINITE);
+	//WaitForSingleObject(pi.hProcess, INFINITE);
 
-	DWORD dwResult = 500;
+	DWORD dwResult = -1;
 	GetExitCodeProcess(pi.hProcess, &dwResult);
 
 	CloseHandle(pi.hProcess);
