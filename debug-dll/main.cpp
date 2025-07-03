@@ -11,9 +11,8 @@ bool pyInitializing = true;
 LONG commitError = 0;
 auto bf2_Py_Initialize = ::Py_Initialize;
 auto bf2_Py_InitModule4 = ::Py_InitModule4;
+auto bf2_PyEval_InitThreads = ::PyEval_InitThreads;
 auto bf2_Py_Finalize = ::Py_Finalize;
-auto bf2_PyErr_PrintEx = ::PyErr_PrintEx;
-auto bf2_PyThreadState_New = ::PyThreadState_New;
 std::unique_ptr<debugger> g_debug = nullptr;
 
 void pyInitialize()
@@ -23,13 +22,12 @@ void pyInitialize()
     bf2_Py_Initialize();
     pyInitializing = false;
 
-    auto tstate = PyThreadState_GET();
-    g_debug->trace_thread(tstate);
-
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
         return;
     }
+
+    g_debug->enable_trace();
 
     // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']
 	// any initializeation done here which depends on python modules need to do their own path initialization
@@ -78,6 +76,15 @@ PyObject* pyInitModule4(const char* name, PyMethodDef* methods, const char* doc,
 }
 static_assert(std::is_same_v<decltype(bf2_Py_InitModule4), decltype(&pyInitModule4)>, "bf2 and pydebug Py_InitModule4 signature must match");
 
+void pyEval_InitThreads()
+{
+    bf2_PyEval_InitThreads();
+    if (g_debug) {
+        g_debug->enable_thread_trace();
+    }
+}
+static_assert(std::is_same_v<decltype(bf2_PyEval_InitThreads), decltype(&pyEval_InitThreads)>, "bf2 and pydebug PyEval_InitThreads signature must match");
+
 void pyFinalize()
 {
     if (g_debug) {
@@ -89,20 +96,6 @@ void pyFinalize()
 }
 static_assert(std::is_same_v<decltype(bf2_Py_Finalize), decltype(&pyFinalize)>, "bf2 and pydebug Py_Finalize signature must match");
 
-auto pyThreadState_New(PyInterpreterState* interp)
-{
-    std::println("pyThreadState_New {}", (void*)interp);
-    auto tstate = bf2_PyThreadState_New(interp);
-
-    if (g_debug && !pyInitializing) {
-        // do not trace the initialization sequence (at least the dis-function requires access to an available opcodes module)
-        g_debug->trace_thread(tstate);
-    }
-
-    return tstate;
-}
-static_assert(std::is_same_v<decltype(bf2_PyThreadState_New), decltype(&pyThreadState_New)>, "bf2 and pydebug PyThreadState_New signature must match");
-
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
     (void)hinst;
@@ -113,6 +106,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
     }
 
     if (dwReason == DLL_PROCESS_ATTACH) {
+		// by default, we stop on entry, unless the command line specifies otherwise
         std::string cmd = GetCommandLineA();
         bool dontStopOnEntry = cmd.contains("+pyDebugStopOnEntry=0");
         g_debug.reset(new debugger(!dontStopOnEntry));
@@ -120,9 +114,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 
         DetourRestoreAfterWith();
         DetourTransactionBegin();
-        DetourAttach((PVOID*)&bf2_PyThreadState_New, pyThreadState_New);
+		// initialize the debugger when bf2 calls Py_Initialize
         DetourAttach((PVOID*)&bf2_Py_Initialize, pyInitialize);
+        // when bf2 initializes the host module, we modify the log function (redirect output to the debugger)
         DetourAttach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
+        // when threads are enabled, we start thread tracing
+		DetourAttach((PVOID*)&bf2_PyEval_InitThreads, pyEval_InitThreads);
+		// shutdown the debugger when bf2 calls Py_Finalize
         DetourAttach((PVOID*)&bf2_Py_Finalize, pyFinalize);
         DetourUpdateThread(GetCurrentThread());
         commitError = DetourTransactionCommit();
@@ -135,9 +133,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
             DetourTransactionBegin();
             DetourUpdateThread(GetCurrentThread());
             DetourDetach((PVOID*)&bf2_Py_Finalize, pyFinalize);
+			DetourDetach((PVOID*)&bf2_PyEval_InitThreads, pyEval_InitThreads);
             DetourDetach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
             DetourDetach((PVOID*)&bf2_Py_Initialize, pyInitialize);
-            DetourDetach((PVOID*)&bf2_PyThreadState_New, pyThreadState_New);
             commitError = DetourTransactionCommit();
         }
     }

@@ -66,6 +66,7 @@ asio::awaitable<void> debugger_session::run()
 			const char* data = asio::buffer_cast<const char*>(buffer.data());
 			json packet = json::parse(data, data + pkgLength);
 			buffer.consume(pkgLength);
+			std::println("{}", packet.dump(4));
 
 			const auto& type = packet["type"];
 			if (type == "request") {
@@ -267,9 +268,10 @@ asio::awaitable<void> debugger_session::handle_threads(const json& packet)
 	auto threads = json::array();
 	for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
 		for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+			auto threadName = !thread->next ? "bf2 (main)" : std::format("bf2 ({})", thread->thread_id);
 			threads.push_back({
 				{ "id", thread->thread_id },
-				{ "name", !thread->next ? "bf2 (main)" : std::format("bf2 ({})", thread->thread_id)}
+				{ "name", threadName }
 				});
 		}
 	}
@@ -308,8 +310,10 @@ asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
 	for (std::uint32_t frameId = 1; frame; frame = frame->f_back, frameId++) {
 		assert(frame->f_code && "f_code is never NULL");
 
-		auto source = json::object();
 		auto filename = _debugger.canonic(PyString_AsString(frame->f_code->co_filename));
+		auto source = json::object();
+		source["name"] = filename;
+
 		if (filename.starts_with("<") && filename.ends_with(">")) {
 			auto sourceRef = _last_source_id++;
 			source["sourceReference"] = sourceRef;
@@ -545,11 +549,6 @@ asio::awaitable<void> debugger_session::handle_setExceptionBreakpoints(const jso
 asio::awaitable<void> debugger_session::handle_pause(const json& packet)
 {
 	_debugger.pause();
-
-	auto timer = asio::steady_timer{co_await asio::this_coro::executor};
-	timer.expires_after(std::chrono::seconds(10));
-		co_await timer.async_wait(asio::use_awaitable);
-
 	co_await async_send_response(packet, {});
 }
 

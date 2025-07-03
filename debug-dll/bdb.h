@@ -30,6 +30,7 @@ public:
     static std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> get_stack(PyFrameObject* frame, PyObject* traceback);
 
 protected:
+	PyObject* _pyDebugger = nullptr;
     bool _quitting = false;
     Breakpoint* _currentbp = nullptr;
     std::unordered_map<std::string, std::unordered_map<line_t, std::vector<Breakpoint>>> _breaks;
@@ -53,7 +54,8 @@ public:
 
     static bool pyInit();
 
-    void trace_thread(PyThreadState* tstate);
+    bool enable_trace();
+    bool enable_thread_trace();
     void disable_trace();
     bool trace_ignore() const { return _evaling || _quitting; }
 

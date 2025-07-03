@@ -34,7 +34,7 @@ private:
 	std::map<std::string, PyCFunction> _hostModule;
 
 public:
-	debugger(bool stopOnEntry, asio::ip::port_type port = 19021);
+	debugger(bool stopOnEntry, asio::ip::port_type port = 5678);
 
 	virtual int trace_dispatch(PyFrameObject* frame, int event, PyObject* arg);
 

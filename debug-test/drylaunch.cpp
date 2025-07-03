@@ -58,7 +58,13 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 
 	std::println("python command line (use exit to quit)");
 	std::print("> ");
-	for (std::string cmd; std::getline(std::cin, cmd) && cmd != "exit"; std::print("> ")) {
+	auto getcl = [](std::string& cmd) {
+		Py_BEGIN_ALLOW_THREADS
+		std::getline(std::cin, cmd);
+		Py_END_ALLOW_THREADS
+		return !std::cin.fail();
+		};
+	for (std::string cmd; getcl(cmd) && cmd != "exit"; std::print("> ")) {
 		if (!cmd.empty()) {
 			PyRun_SimpleString(cmd.c_str());
 			py_err_print();

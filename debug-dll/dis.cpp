@@ -3,7 +3,7 @@
 std::string dis(PyCodeObject* co, int lasti)
 {
     std::string codeStr;
-	auto strIOModule = PyImport_ImportModule((char*)"StringIO");
+    auto strIOModule = PyImport_ImportModule((char*)"StringIO");
     auto disModule = PyImport_ImportModule((char*)"dis");
 
     if (strIOModule && disModule) {
@@ -18,15 +18,16 @@ std::string dis(PyCodeObject* co, int lasti)
                 auto disRes = PyObject_CallFunction(dis, (char*)"Oi", co, lasti);
                 if (disRes) {
                     Py_DECREF(disRes);
-                } else {
+                }
+                else {
                     PyErr_Print();
-				}
+                }
 
                 PySys_SetObject((char*)"stdout", oldStdout);
 
                 auto disCode = PyObject_CallMethod(strIO, (char*)"getvalue", nullptr);
                 if (disCode) {
-					codeStr = PyString_AS_STRING(disCode);
+                    codeStr = PyString_AS_STRING(disCode);
                     Py_DECREF(disCode);
                 }
             }
@@ -36,6 +37,10 @@ std::string dis(PyCodeObject* co, int lasti)
 
         Py_XDECREF(dis);
         Py_XDECREF(strIOClass);
+    }
+
+    if (codeStr.empty()) {
+        codeStr = "Failed to dissassemble bytecode - sys.path might not yet be initialized";
     }
 
     Py_XDECREF(disModule);
