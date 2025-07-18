@@ -76,7 +76,7 @@ int run_dry(const char* procName, const std::vector<std::string>& injectDlls)
 
 bool init_bf2()
 {
-	auto bf2Module = PyImport_ImportModule(BF2PY_CSTR("bf2"));
+	auto bf2Module = PyImport_ImportModule((char*)"bf2");
 	if (!bf2Module) {
 		std::println("Failed to import bf2 module");
 		py_err_print();

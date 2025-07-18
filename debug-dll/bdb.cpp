@@ -14,7 +14,7 @@ namespace {
     PyTypeObject bf2PyDebuggerType = {
         .ob_refcnt = 1,
         .ob_type = &PyType_Type,
-        .tp_name = BF2PY_CSTR("bf2py.Debugger"),
+        .tp_name = (char*)"bf2py.Debugger",
         .tp_basicsize = sizeof(bf2PyDebugger)
     };
 }
@@ -99,19 +99,21 @@ bool bdb::enable_trace()
 
 bool bdb::enable_thread_trace()
 {
-    auto threadingModule = PyImport_ImportModule("threading");
+    auto threadingModule = PyImport_ImportModule((char*)"threading");
     if (!threadingModule) {
         std::println(stderr, "Failed to import threading module");
         return false;
     }
 
-    auto setTrace = PyObject_GetAttrString(threadingModule, "settrace");
+    auto setTrace = PyObject_GetAttrString(threadingModule, (char*)"settrace");
     if (!setTrace) {
         std::println(stderr, "Failed to get settrace from threading module");
         Py_DECREF(threadingModule);
         return false;
     }
 
+	// register the callback which is implemented in bf2PyDebuggerType.tp_call
+    // (the debugger object itself is callable)
     auto res = PyObject_CallFunction(setTrace, (char*)"O", _pyDebugger);
     if (res) {
         Py_DECREF(res);

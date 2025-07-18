@@ -107,13 +107,7 @@ function Get-VSCommandCmd {
     return
   }
 
-  $vsInstallations = & $vsWherePath -legacy -prerelease -format json | ConvertFrom-Json
-  if (!$vsInstallations.Count) {
-    Write-Host "Unable to detect Visual Studio Installation"
-  }
-
-  $visualStudioPath = $vsInstallations[0].installationPath
-
+  $visualStudioPath = & $vsWherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
   $vsDevCmdPath = Join-Path $visualStudioPath "Common7\Tools\VsDevCmd.bat"
   if (!(Test-Path $vsDevCmdPath)) {
     Write-Error "Invalid or no Visual Studio installation found"
@@ -121,6 +115,7 @@ function Get-VSCommandCmd {
     return
   }
 
+  Write-Host "Using Visual Studio Installation in: $visualStudioPath"
   return $vsDevCmdPath
 }
 
@@ -142,7 +137,7 @@ function Add-DicePyLibrary {
   $defContent += "LIBRARY dice_py"
   $defContent += "EXPORTS"
   foreach ($line in $dumpbinOutput -split "`n") {
-    if ($line -match "^\s*(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(.+)$") {
+    if ($line -match "^\s*(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(.+?)\r?$") {
       $ordinal = $Matches[1]
       $symbol = $Matches[2]
       $defContent += "    $($symbol) @$($ordinal)"

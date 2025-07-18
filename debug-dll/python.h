@@ -1,10 +1,13 @@
 #pragma once
-#define HAVE_SNPRINTF
-//#define MS_NO_COREDLL
-//#define Py_ENABLE_SHARED
-#ifdef _DEBUG
-#define RESTORE_DEBUG
-#undef _DEBUG
+#ifndef _BF2PY_PYTHON_H_
+#define _BF2PY_PYTHON_H_
+
+#define HAVE_SNPRINTF // prevent python from defining snprintf
+#define MS_NO_COREDLL // prevent python2x.lib from being linked
+#define Py_ENABLE_SHARED // make Py* symbols be loaded via dice_py.dll
+#ifdef _DEBUG // even though this might be a debug build, we need to link to the release version
+#  define BF2PY_RESTORE_DEBUG
+#  undef _DEBUG
 #endif
 
 #pragma warning(push)
@@ -15,18 +18,14 @@
 #include <frameobject.h>
 #pragma warning(pop)
 
-#ifdef RESTORE_DEBUG
-#define _DEBUG
-#endif
-
-#if PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION < 7
-#  // const-ness was added in python 2.7
-#  define BF2PY_CSTR(str) (char*)str
-#else
-#  define BF2PY_CSTR(str) str
+#ifdef BF2PY_RESTORE_DEBUG
+#  define _DEBUG
+#  undef BF2PY_RESTORE_DEBUG
 #endif
 
 #ifndef Py_TYPE
 #  // first defined in python 2.6
 #  define Py_TYPE(ob)             (((PyObject*)(ob))->ob_type)
 #endif
+
+#endif // _BF2PY_PYTHON_H_

@@ -6,12 +6,22 @@
 #include <iomanip>
 #include <sstream>
 #include <filesystem>
+#include <thread>
+
+std::string to_utf8(const wchar_t* wstr)
+{
+	auto len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+	auto str = std::string(len, '\0');
+	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, str.data(), len, nullptr, nullptr);
+	return str;
+}
 
 int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, const std::string& bf2Path, const std::vector<std::string>& bf2args)
 {
-	STARTUPINFOA si = { .cb = sizeof(si) };
-	auto pi = ::PROCESS_INFORMATION{};
+	STARTUPINFOW si = { .cb = sizeof(si) };
+	PROCESS_INFORMATION pi = {};
 	DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED | DEBUG_PROCESS;
+
 	std::vector<const char*> dlls;
 	std::vector<std::string> normalizedDlls;
 	bool hasDebugDll = false;
@@ -31,24 +41,29 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 		dlls.push_back(normalizedDlls.back().c_str());
 	}
 
-	std::string commandLine;
+	std::wstring commandLine;
 	for (const auto& arg : bf2args) {
-		std::stringstream ss;
-		ss << std::quoted(arg);
-		commandLine += std::format(" {}", ss.str());
+		std::wstringstream ss;
+		ss << std::quoted(std::wstring{ arg.begin(), arg.end() });
+		commandLine += std::format(L" {}", ss.str());
 	}
 
-	auto exePath = std::format("{}\\{}", bf2Path.empty() ? "." : bf2Path, "bf2_w32ded.exe");
-	auto res = ::DetourCreateProcessWithDllsA(exePath.c_str(), commandLine.data(), nullptr, nullptr, FALSE, dwFlags, nullptr, bf2Path.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
+	auto workingDir = bf2Path.empty() ? std::filesystem::current_path() : std::filesystem::path(bf2Path);
+	auto exePath = workingDir / "bf2_w32ded.exe";
+	bool inheritHandles = false; // the bf2 server creates its own window and must not inerhit any handles
+	auto res = ::DetourCreateProcessWithDllsW(exePath.c_str(), commandLine.data(), nullptr, nullptr, inheritHandles, dwFlags, nullptr, workingDir.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
 	if (!res) {
 		std::println("failed to create process");
 		return -1;
 	}
 
 	ResumeThread(pi.hThread);
+
 	DEBUG_EVENT debugEvent;
 	std::string lastMessage;
 	std::size_t repCount = 0;
+
+	// WaitForSingleObject(pi.hProcess, INFINITE);
 	while (WaitForDebugEvent(&debugEvent, INFINITE)) {
 		DWORD continueEvent = DBG_CONTINUE;
 		auto event = debugEvent.dwDebugEventCode;
@@ -81,7 +96,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 					break;
 				}
 				buf[n] = '\0';
-				message = std::format("loading {}", buf);
+				message = std::format("loading dll: {}", buf);
 
 				CloseHandle(dllInfo.hFile);
 			}
@@ -107,6 +122,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 		}
 
 		if (!message.empty()) {
+			// make repeating messages not consume a new line
 			if (lastMessage.empty()) {
 				lastMessage = message;
 				std::print("{}\r", message);
@@ -131,8 +147,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			std::println("failed to sent continue event: {}", GetLastError());
 			break;
 		}
-	}
-	//WaitForSingleObject(pi.hProcess, INFINITE);
+	}	
 
 	DWORD dwResult = -1;
 	GetExitCodeProcess(pi.hProcess, &dwResult);

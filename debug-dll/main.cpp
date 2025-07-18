@@ -18,14 +18,13 @@ std::unique_ptr<debugger> g_debug = nullptr;
 void pyInitialize()
 {
     // note: before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
-
     bf2_Py_Initialize();
     pyInitializing = false;
 
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
         return;
-    }   
+    }
 
     g_debug->enable_trace();
 
@@ -100,7 +99,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
     (void)hinst;
     (void)reserved;
-    
     if (DetourIsHelperProcess()) {
         return TRUE;
     }

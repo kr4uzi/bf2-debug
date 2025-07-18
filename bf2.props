@@ -3,7 +3,7 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
     <BF2_DIR>C:\Battlefield 2</BF2_DIR>
-    <BF2_PY_VERSION>2.7.18</BF2_PY_VERSION>
+    <BF2_PY_VERSION>2.3.4</BF2_PY_VERSION>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
