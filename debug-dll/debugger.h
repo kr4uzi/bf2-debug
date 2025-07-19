@@ -21,7 +21,9 @@ private:
 	asio::io_context _ctx;
 	asio::ip::port_type _port;
 	bool _wait_for_connection;
-	std::jthread _runner;
+	int _output_fd[2] = { -1, -1 }; // read, write
+	std::jthread _io_runner, _output_redirector;
+	int _original_stdout_fd = -1;
 	std::optional<debugger_session> _session;
 
 	Status _state = Status::Running;
@@ -42,6 +44,8 @@ public:
 
 	void start();
 	void stop();
+	void start_redirect_output();
+	void stop_redirect_output();
 
 	void log(const std::string& msg);
 	template<typename... Args>
@@ -55,7 +59,7 @@ public:
 	const auto& current_frame() const { return _curframe; }
 	const auto& current_thread() const { return _curthread; }
 	auto state() const { return _state; }
-	void state(decltype(_state) state) { _state = state; }	
+	void state(decltype(_state) state) { _state = state; }
 
 private:
 	asio::awaitable<void> run();

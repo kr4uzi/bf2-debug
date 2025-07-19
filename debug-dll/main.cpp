@@ -7,19 +7,34 @@
 #include "debugger.h"
 #include "dis.h"
 
-bool pyInitializing = true;
 LONG commitError = 0;
+auto bf2_AllocConsole = ::AllocConsole;
 auto bf2_Py_Initialize = ::Py_Initialize;
 auto bf2_Py_InitModule4 = ::Py_InitModule4;
 auto bf2_PyEval_InitThreads = ::PyEval_InitThreads;
 auto bf2_Py_Finalize = ::Py_Finalize;
 std::unique_ptr<debugger> g_debug = nullptr;
 
+BOOL __stdcall allocConsole()
+{
+	auto res = bf2_AllocConsole();
+
+	// stdout needs to be reinitialized after the console is allocated
+    FILE* f;
+    freopen_s(&f, "CONOUT$", "w", stdout);
+
+    if (g_debug) {
+        g_debug->start_redirect_output();
+    }
+
+	return res;
+}
+static_assert(std::is_same_v<decltype(bf2_AllocConsole), decltype(&allocConsole)>, "bf2 and pydebug AllocConsole signature must match");
+
 void pyInitialize()
 {
     // note: before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
     bf2_Py_Initialize();
-    pyInitializing = false;
 
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
@@ -97,6 +112,7 @@ static_assert(std::is_same_v<decltype(bf2_Py_Finalize), decltype(&pyFinalize)>, 
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
+	// Note: Any outputs will not be visible (if launched via bf2) until AllocConsole is called
     (void)hinst;
     (void)reserved;
     if (DetourIsHelperProcess()) {
@@ -108,10 +124,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         std::string cmd = GetCommandLineA();
         bool dontStopOnEntry = cmd.contains("+pyDebugStopOnEntry=0");
         g_debug.reset(new debugger(!dontStopOnEntry));
-        g_debug->start();
+        g_debug->start();      
 
         DetourRestoreAfterWith();
         DetourTransactionBegin();
+        // enable output to debugger console redirection
+        DetourAttach((PVOID*)&bf2_AllocConsole, allocConsole);
 		// initialize the debugger when bf2 calls Py_Initialize
         DetourAttach((PVOID*)&bf2_Py_Initialize, pyInitialize);
         // when bf2 initializes the host module, we modify the log function (redirect output to the debugger)
@@ -134,6 +152,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 			DetourDetach((PVOID*)&bf2_PyEval_InitThreads, pyEval_InitThreads);
             DetourDetach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
             DetourDetach((PVOID*)&bf2_Py_Initialize, pyInitialize);
+            DetourDetach((PVOID*)&bf2_AllocConsole, allocConsole);
             commitError = DetourTransactionCommit();
         }
     }

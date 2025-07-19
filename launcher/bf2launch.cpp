@@ -16,6 +16,14 @@ std::string to_utf8(const wchar_t* wstr)
 	return str;
 }
 
+std::wstring to_wstring(const char* str)
+{
+	auto len = MultiByteToWideChar(CP_UTF8, 0, str, -1, nullptr, 0);
+	auto wstr = std::wstring(len, L'\0');
+	MultiByteToWideChar(CP_UTF8, 0, str, -1, wstr.data(), len);
+	return wstr;
+}
+
 int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, const std::string& bf2Path, const std::vector<std::string>& bf2args)
 {
 	STARTUPINFOW si = { .cb = sizeof(si) };
@@ -62,7 +70,6 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 	DEBUG_EVENT debugEvent;
 	std::string lastMessage;
 	std::size_t repCount = 0;
-
 	// WaitForSingleObject(pi.hProcess, INFINITE);
 	while (WaitForDebugEvent(&debugEvent, INFINITE)) {
 		DWORD continueEvent = DBG_CONTINUE;
@@ -72,45 +79,54 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			auto code = debugEvent.u.Exception.ExceptionRecord.ExceptionCode;
 
 			if (code == STATUS_BREAKPOINT) {
-				message = "breakpoint";
+				message = "breakpoint => continuing";
 			}
 			else {
 				//continueEvent = DBG_EXCEPTION_NOT_HANDLED;
-				message = std::format("Exception caught in PID: {}, Code: {:#x}", debugEvent.dwProcessId, debugEvent.u.Exception.ExceptionRecord.ExceptionCode);
+				message = std::format("Exception caught in PID: {}, Code: {:#x} => continuing", debugEvent.dwProcessId, debugEvent.u.Exception.ExceptionRecord.ExceptionCode);
 			}
 		}
 		else if (event == LOAD_DLL_DEBUG_EVENT) {
 			auto& dllInfo = debugEvent.u.LoadDll;
 			if (dllInfo.hFile) {
-				DWORD tmp[1 + 1024 / 2];
-				if (GetFileInformationByHandleEx(dllInfo.hFile, FileNameInfo, tmp, sizeof tmp) == 0) {
-					std::println("failed to get file information for dll handle");
-					break;
+				// Note: FileName is not null-terminated so we need to always allocate one extra null terminator character
+				auto fileNameCharSize = sizeof(FILE_NAME_INFO::FileName[0]);
+				std::vector<char> fileInfoBuffer(sizeof(FILE_NAME_INFO) + (MAX_PATH + 1) * fileNameCharSize);
+				auto fileInfo = reinterpret_cast<FILE_NAME_INFO*>(fileInfoBuffer.data());
+				int error = 0;
+				if (!GetFileInformationByHandleEx(dllInfo.hFile, FileNameInfo, fileInfo, fileInfoBuffer.size() - fileNameCharSize)) {
+					error = GetLastError();
+					if (error == ERROR_MORE_DATA) {
+						fileInfoBuffer.resize(fileInfoBuffer.size() + fileInfo->FileNameLength);
+						error = 0;
+						fileInfo = reinterpret_cast<FILE_NAME_INFO*>(fileInfoBuffer.data());
+						if (!GetFileInformationByHandleEx(dllInfo.hFile, FileNameInfo, fileInfo, fileInfoBuffer.size() - fileNameCharSize)) {
+							error = GetLastError();
+						}
+					}
 				}
 
-				char buf[MAX_PATH * 2];
-				FILE_NAME_INFO* info = (FILE_NAME_INFO*)tmp;
-				int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, info->FileName, info->FileNameLength / 2, buf, sizeof(buf) - 1, NULL, NULL);
-				if (n == 0) {
-					std::println("WideCharToMultiByte failed");
-					break;
+				if (error) {
+					message = std::format("failed to get file information for dll handle: {}", error);
 				}
-				buf[n] = '\0';
-				message = std::format("loading dll: {}", buf);
+				else {
+					message = std::format("loading dll: {}", to_utf8(fileInfo->FileName));
+				}
 
+				// msdn: debugger should close the handle to the DLL handle while processing LOAD_DLL_DEBUG_EVENT
 				CloseHandle(dllInfo.hFile);
 			}
 		}
 		else if (event == OUTPUT_DEBUG_STRING_EVENT) {
-			// TODO: this does not yet properly set the message (bytes are reserved, but the length is never set, as such the string is always empty)
-			// use a fixed buffer instead and then assign it to message?
-			auto& strInfo = debugEvent.u.DebugString;
-			auto numBytes = strInfo.nDebugStringLength * (strInfo.fUnicode ? sizeof(wchar_t) : sizeof(char));
-			message.reserve(numBytes);
+			const auto& strInfo = debugEvent.u.DebugString;
+			std::vector<char> messageBuffer(strInfo.nDebugStringLength); // length of the debug string in bytes (including null terminator)
 			SIZE_T bytesRead = 0;
-			if (ReadProcessMemory(pi.hProcess, strInfo.lpDebugStringData, message.data(), numBytes, &bytesRead)) {
+			if (ReadProcessMemory(pi.hProcess, strInfo.lpDebugStringData, messageBuffer.data(), messageBuffer.size(), &bytesRead)) {
 				if (strInfo.fUnicode) {
-					WideCharToMultiByte(CP_UTF8, 0, reinterpret_cast<wchar_t*>(message.data()), strInfo.nDebugStringLength, message.data(), message.capacity(), nullptr, nullptr);
+					message = to_utf8(reinterpret_cast<wchar_t*>(messageBuffer.data()));
+				}
+				else {
+					message = messageBuffer.data();
 				}
 			}
 			else {
