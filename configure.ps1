@@ -44,7 +44,7 @@ function Get-BattlefieldDirectory {
     Add-Type -AssemblyName System.Windows.Forms
     $browser = New-Object System.Windows.Forms.FolderBrowserDialog
     $browser.ShowNewFolderButton = $false
-    $browser.SelectedPath = $Env:Programfiles
+    $browser.SelectedPath = ${env:Programfiles}
     $browser.Description = "This PowerShell Script will check the python version of the dice_py.dll. Please select the Battlefield 2 install directory."
     if ($browser.ShowDialog() -ne "OK") {
       return
@@ -96,9 +96,9 @@ function Get-VSCommandCmd {
   }
 
   Write-Host "Detecting Visual Studio installation ..."
-  $programFilesX86 = $Env:ProgramFiles(x86)
+  $programFilesX86 = ${env:ProgramFiles(x86)}
   if (-not $programFilesX86) {
-    $programFilesX86 = $Env:ProgramFiles
+    $programFilesX86 = ${env:ProgramFiles}
   }
 
   $vsWherePath = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -107,13 +107,7 @@ function Get-VSCommandCmd {
     return
   }
 
-  $vsInstallations = & $vsWherePath -legacy -prerelease -format json | ConvertFrom-Json
-  if (!$vsInstallations.Count) {
-    Write-Host "Unable to detect Visual Studio Installation"
-  }
-
-  $visualStudioPath = $vsInstallations[0].installationPath
-
+  $visualStudioPath = & $vsWherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
   $vsDevCmdPath = Join-Path $visualStudioPath "Common7\Tools\VsDevCmd.bat"
   if (!(Test-Path $vsDevCmdPath)) {
     Write-Error "Invalid or no Visual Studio installation found"
@@ -121,6 +115,7 @@ function Get-VSCommandCmd {
     return
   }
 
+  Write-Host "Using Visual Studio Installation in: $visualStudioPath"
   return $vsDevCmdPath
 }
 
@@ -142,7 +137,7 @@ function Add-DicePyLibrary {
   $defContent += "LIBRARY dice_py"
   $defContent += "EXPORTS"
   foreach ($line in $dumpbinOutput -split "`n") {
-    if ($line -match "^\s*(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)\s*$") {
+    if ($line -match "^\s*(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(.+?)\r?$") {
       $ordinal = $Matches[1]
       $symbol = $Matches[2]
       $defContent += "    $($symbol) @$($ordinal)"
@@ -150,7 +145,7 @@ function Add-DicePyLibrary {
   }
   Write-Host "> Created dice_py.def"
 
-  $defContent = $defContent -join "`n"
+  $defContent = $defContent -join "`r`n"
   Set-Content -Path "dice_py.def" -Value $defContent
   cmd.exe /c "`"$vsDevCmd`" -no_logo && lib /NOLOGO /DEF:dice_py.def /OUT:dice_py.lib /MACHINE:x86"
   Write-Host "> Created dice_py.lib"
@@ -165,7 +160,9 @@ function main {
   $props = $bf2Props.Project.PropertyGroup | Where-Object { $_.Label -eq "UserMacros" }
   $bf2Dir = Get-BattlefieldDirectory -InitialValue $props.BF2_DIR -UserBF2Dir $UserBF2Dir
   if (!$bf2Dir) {
-    Write-Host "No Battlefield 2 Directory detected or slected. Aborting..."
+    Write-Host "No Battlefield 2 Directory detected or slected."
+    Write-Host "Please manually configure the path in bf2.props"
+    Write-Host " Aborting..."
     return
   }
 
@@ -195,7 +192,7 @@ function main {
     }
   }
 
-  $dlPath = Join-Path $Env:TEMP "Python-$pyVersion.tgz"
+  $dlPath = Join-Path ${env:TEMP} "Python-$pyVersion.tgz"
   if (Test-Path $dlPath) {
     Write-Output "Using pre-downloaded source archive"
   }
@@ -205,12 +202,12 @@ function main {
     Write-Output "Downloading python headers from official source for detected version: $pyVersion"
     Invoke-WebRequest "$dlUrl" -OutFile $dlPath -ErrorAction Stop
 
-    tar -xzf $dlPath -C $Env:TEMP
+    tar -xzf $dlPath -C ${env:TEMP}
     if (Test-Path -Path ".\python-$pyVersion") {
       Remove-Item -Path ".\python-$pyVersion" -Recurse
     }
 
-    $unzipDir = Join-Path $Env:TEMP "Python-$pyVersion"
+    $unzipDir = Join-Path ${env:TEMP} "Python-$pyVersion"
     Move-Item -Path "$unzipDir\Include" -Destination ".\python-$pyVersion"
     Move-Item -Path "$unzipDir\PC\pyconfig.h" -Destination ".\python-$pyVersion\pyconfig.h"
     # Remove-Item is unable to remove certain the files in Mac/IDE, only rmdir seems to work

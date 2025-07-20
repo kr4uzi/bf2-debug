@@ -1,434 +1,587 @@
+#include "debugger_session.h"
 #include "debugger.h"
-#include "dis.h"
-#include <libzippp/libzippp.h>
+#include <string>
+#include <iostream>
+#include <print>
 #include <ranges>
 #include <algorithm>
-#include <dap/protocol.h>
-#include <dap/session.h>
-#include <filesystem>
+#include <chrono>
+#include "dis.h"
+#include <libzippp/libzippp.h>
 
-namespace dap {
-    struct BF2DAPEvent : public Event {
-        dap::string type;
-        dap::string data;
-    };
+std::hash<PyObject*> pyObjectHash{};
+std::hash<PyFrameObject*> pyFrameObjectHash{};
+std::hash<std::string> filenameHash{};
+using namespace nlohmann;
+debugger_session::debugger_session(debugger& debugger, asio::ip::tcp::socket socket)
+	: _debugger(debugger), _socket(std::move(socket))
+{
 
-    DAP_DECLARE_STRUCT_TYPEINFO(BF2DAPEvent);
-    DAP_IMPLEMENT_STRUCT_TYPEINFO(BF2DAPEvent,
-        "bf2py",
-        DAP_FIELD(type, "type"),
-        DAP_FIELD(data, "data"));
 }
 
-void debugger::send_mod_path()
+std::uint32_t get_packet_length(asio::streambuf& buffer)
 {
-    // note: the bf2 host module is initialized *after* sys.path is set using PyRun_SimpleString
-    // this means that if started with stopOnEntry cannot yet resolve the current mod path
-    auto it = hostModule.find("sgl_getModDirectory");
-    if (it != hostModule.end()) {
-        // decompiled bf2 server executable showed that arguments are not used and a string is always returned
-        auto modDir = it->second(nullptr, nullptr);
-        if (modDir) {
-            dap::BF2DAPEvent evt;
-            evt.type = "modpath";
-            evt.data = std::format("{};{}", std::filesystem::current_path().string(), PyString_AS_STRING(modDir));
-            send(evt);
-        }
-    }
+	auto stream = std::istream{ &buffer };
+	std::string header;
+	std::uint32_t length = 0;
+	while (std::getline(stream, header)) {
+		if (header.empty() || header == "\r") {
+			break;
+		}
+		if (header.starts_with("Content-Length:")) {
+			auto pos = header.find(':');
+			if (pos != std::string::npos) {
+				auto end = std::string::size_type{};
+				length = std::stoul(header.substr(pos + 1), &end);
+				if (end == header.length() - std::string_view{ "Content-Length:" }.length()) {
+					return 0;
+				}
+			}
+		}
+	}
+
+	return length;
 }
 
-void debugger::start(int port)
+asio::awaitable<void> debugger_session::run()
 {
-    auto onClientConnected = [this](const std::shared_ptr<dap::ReaderWriter>& socket) {
-        std::hash<PyObject*> pyObjectHash{};
-        std::hash<std::string> filenameHash{};
+	std::println("[session] running on port {}", _socket.remote_endpoint().port());
+	try {
+		auto buffer = asio::streambuf{};
+		while (_socket.is_open()) {
+			const auto& [error, recvLength] = co_await asio::async_read_until(_socket, buffer, "\r\n\r\n", asio::as_tuple(asio::use_awaitable));
+			if (error) {
+				break;
+			}
 
-        Event terminate, initialized;
-        std::shared_ptr session = dap::Session::create();
-        session->bind(socket);
+			auto pkgLength = get_packet_length(buffer);
+			if (pkgLength == 0) {
+				std::println(stderr, "Received empty packet, closing session.");
+				break;
+			}
 
-        session->onError([&](const char* msg) {
-            std::println("Session error: {}", msg);
-            terminate.fire();
-        });
+			if (buffer.size() < pkgLength) {
+				co_await asio::async_read(_socket, buffer, asio::transfer_exactly(pkgLength - buffer.size()), asio::use_awaitable);
+			}
 
-        session->registerHandler([&](const dap::InitializeRequest&) {
-            dap::InitializeResponse response;
-            response.supportsConfigurationDoneRequest = true;
-            // 'never', 'always', 'unhandled', 'userUnhandled'
-            dap::array<dap::ExceptionBreakpointsFilter> exFilters;
-            exFilters.push_back(dap::ExceptionBreakpointsFilter{
-                .filter = "never",
-                .label = "Never"
-            });
-            exFilters.push_back(dap::ExceptionBreakpointsFilter{
-                .filter = "always",
-                .label = "Alawys"
-            });
-            exFilters.push_back(dap::ExceptionBreakpointsFilter{
-                .filter = "unhandled",
-                .label = "Unhandled"
-            });
-            response.exceptionBreakpointFilters = exFilters;
-            return response;
-        });
+			const char* data = asio::buffer_cast<const char*>(buffer.data());
+			json packet = json::parse(data, data + pkgLength);
+			buffer.consume(pkgLength);
 
-        session->registerSentHandler([&](const dap::ResponseOrError<dap::InitializeResponse>&) {
-            session->send(dap::InitializedEvent());
-            initialized.fire();
-        });
+			const auto& type = packet["type"];
+			if (type == "request") {
+				using namespace nlohmann::literals;
+				const auto& command = packet["command"];
+				if (command == "initialize") {
+					co_await handle_initialize(packet);
+				}
+				else if (command == "attach") {
+					co_await handle_attach(packet);
+				}
+				else if (command == "configurationDone") {
+					co_await handle_configurationDone(packet);
+				}
+				else if (command == "threads") {
+					co_await handle_threads(packet);
+				}
+				else if (command == "stackTrace") {
+					co_await handle_stackTrace(packet);
+				}
+				else if (command == "scopes") {
+					co_await handle_scopes(packet);
+				}
+				else if (command == "variables") {
+					co_await handle_variables(packet);
+				}
+				else if (command == "source") {
+					co_await handle_source(packet);
+				}
+				else if (command == "setExceptionBreakpoints") {
+					co_await handle_setExceptionBreakpoints(packet);
+				}
+				else if (command == "setBreakpoints") {
+					co_await handle_setBreakpoints(packet);
+				}
+				else if (command == "pause") {
+					co_await handle_pause(packet);
+				}
+				else if (command == "continue") {
+					co_await handle_continue(packet);
+				}
+				else if (command == "next") {
+					co_await handle_next(packet);
+				}
+				else if (command == "stepIn") {
+					co_await handle_stepIn(packet);
+				}
+				else if (command == "stepOut") {
+					co_await handle_stepOut(packet);
+				}
+				else if (command == "disconnect") {
+					co_await handle_disconnect(packet);
+				}
+				else {
+					std::println(stderr, "[session][error] Unknown request: {}", packet.dump(4));
+				}
+			}
+		}
+	}
+	catch (std::exception& e) {
+		std::println(stderr, "[session][error] {}", e.what());
+	}
+}
 
-        session->registerHandler([&](const dap::AttachRequest&) {
-            return dap::AttachResponse();
-        });
+void debugger_session::send_modpath(const std::string& modPath)
+{
+	send_sync({
+			{ "type", "event" },
+			{ "event", "bf2py" },
+			{ "body", {
+				{ "type", "modpath" },
+				{ "data",  modPath }
+			}}
+		});
+}
 
-        session->registerHandler([&](const dap::ConfigurationDoneRequest&) {
-            return dap::ConfigurationDoneResponse();
-        });
+void debugger_session::send_entry(std::uint32_t threadId)
+{
+	send_sync({
+			{ "type", "event" },
+			{ "event", "stopped" },
+			{ "body", {
+				{ "reason", "entry" },
+				{ "threadId",  threadId }
+			}}
+		});
+}
 
-        session->registerHandler([&](const dap::ThreadsRequest&) {
-            dap::ThreadsResponse response;
-            dap::Thread thread;
-            thread.id = thread_id;
-            thread.name = "bf2";
-            response.threads.push_back(thread);
-            return response;
-        });
+void debugger_session::send_step(std::uint32_t threadId)
+{
+	send_sync({
+			{ "type", "event" },
+			{ "event", "stopped" },
+			{ "body", {
+				{ "reason", "step" },
+				{ "threadId",  threadId }
+			}}
+		});
+}
 
-        session->registerHandler([&](const dap::ScopesRequest& request) -> dap::ResponseOrError<dap::ScopesResponse> {
-            std::unique_lock lock(mutex);
-            if (request.frameId >= stack.size()) {
-                return dap::Error("Invalid frameId '%d'", int(request.frameId));
-            }
+void debugger_session::send_exception(std::uint32_t threadId, const std::string& text)
+{
+	send_sync({
+			{ "type", "event" },
+			{ "event", "stopped" },
+			{ "body", {
+				{ "reason", "exception" },
+				{ "threadId",  threadId },
+				{ "text",  text }
+			}}
+		});
+}
 
-            const auto& pyFrame = stack[static_cast<std::size_t>(request.frameId)].first;
-            dap::ScopesResponse response;
+void debugger_session::send_output(const std::string& output)
+{
+	send_sync({
+			{ "type", "event" },
+			{ "event", "output" },
+			{ "body", {
+				{ "category", "console" },
+				{ "output", output }
+			}}
+		});
+}
 
-            if (pyFrame->f_locals == nullptr) {
-                // i think if f_locals are null if using PyEval_CallObject
-                // PyFrame_FastToLocals(pyFrame);
-            }
+void debugger_session::send_sync(const json& data)
+{
+	auto dataBytes = data.dump();
+	_socket.send(asio::buffer(std::format("Content-Length: {}\r\n\r\n{}", dataBytes.size(), dataBytes)));
+}
 
-            if (pyFrame->f_locals) {
-                dap::Scope locals;
-                locals.name = "Locals";
-                locals.presentationHint = "locals";
-                locals.variablesReference = pyObjectHash(pyFrame->f_locals);
-                var_refs[locals.variablesReference] = pyFrame->f_locals;
-                response.scopes.push_back(locals);
-            }
+asio::awaitable<void> debugger_session::async_send(const json& data)
+{
+	auto dataBytes = data.dump();
+	co_await _socket.async_send(asio::buffer(std::format("Content-Length: {}\r\n\r\n{}", dataBytes.size(), dataBytes)), asio::use_awaitable);
+}
 
-            if (pyFrame->f_globals) {
-                dap::Scope globals;
-                globals.name = "Globals";
-                globals.variablesReference = pyObjectHash(pyFrame->f_globals);
-                var_refs[globals.variablesReference] = pyFrame->f_globals;
-                response.scopes.push_back(globals);
-            }
+asio::awaitable<void> debugger_session::async_send_response(const json& request, const json& body, bool success)
+{
+	const auto response = json{
+		{ "type", "response" },
+		{ "request_seq", request["seq"] },
+		{ "success", success },
+		{ "command", request["command"] },
+		{ "body", body }
+	};
 
-            return response;
-        });
+	co_await async_send(response);
+}
 
-        session->registerHandler([&](const dap::VariablesRequest& request) -> dap::ResponseOrError<dap::VariablesResponse> {
-            std::unique_lock lock(mutex);
-            dap::VariablesResponse response;
-            auto it = var_refs.find(request.variablesReference);
-            if (it == var_refs.end()) {
-                return dap::Error("Unknown variablesReference '%d'", int(request.variablesReference));
-            }
+asio::awaitable<void> debugger_session::async_send_event(const std::string& event, const json& body)
+{
+	auto data = json{
+		{ "type", "event" },
+		{ "event", event }
+	};
 
-            // currently only dicts are stored in var_refs
-            PyObject* dict = it->second;
-            PyObject* key, * value;
-            int pos = 0;
+	if (!body.empty()) {
+		data["body"] = body;
+	}
 
-            while (PyDict_Next(dict, &pos, &key, &value)) {
-                PyObject* keyStr = PyObject_Str(key);
-                PyObject* valueStr = PyObject_Str(value);
-                dap::Variable var;
+	co_await async_send(data);
+}
 
-                var.name = PyString_AsString(keyStr);
-                var.value = PyString_AsString(valueStr);
-                Py_DECREF(valueStr);
-                Py_DECREF(keyStr);
+void debugger_session::forget(std::uint32_t threadId)
+{
+	_var_refs.clear();
+	_source_refs.clear();
+	_frame_refs.clear();
+}
 
-                if (PyInt_Check(value)) {
-                    var.type = "int";
-                }
-                else if (PyFloat_Check(value)) {
-                    var.type = "float";
-                }
-                else if (PyString_Check(value)) {
-                    var.type = "string";
-                }
-                else if (PyBool_Check(value)) {
-                    var.type = "bool";
-                }
-                else if (PyList_Check(value)) {
-                    var.type = "list";
-                }
-                else if (PyDict_Check(value)) {
-                    var.type = "dict";
-                    var.variablesReference = pyObjectHash(key);
-                    var_refs[var.variablesReference] = value;
-                }
-                else {
-                    var.type = "object";
-                }
+asio::awaitable<void> debugger_session::handle_initialize(const json& packet)
+{
+	co_await async_send_response(packet, {
+			{ "supportsConfigurationDoneRequest", true },
+			{ "exceptionBreakpointFilters", json::array({
+					{ { "filter", "never" }, { "label", "Never" } },
+					{ { "filter", "always" }, { "label", "Always" } },
+					{ { "filter", "unhandled" }, { "label", "Unhandled" } }
+				}) }
+		});
 
-                response.variables.push_back(var);
-            }
+	co_await async_send_event("initialized", {});
+}
 
-            return response;
-        });
+asio::awaitable<void> debugger_session::handle_attach(const json& packet)
+{
+	co_await async_send_response(packet, {});
+}
 
-        session->registerHandler([&](const dap::PauseRequest& request) -> dap::ResponseOrError<dap::PauseResponse> {
-            if (thread_id != request.threadId) {
-                return dap::Error("Invalid threadId '%d'", int(thread_id));
-            }
+asio::awaitable<void> debugger_session::handle_configurationDone(const json& packet)
+{
+	_initialized = true;
+	co_await async_send_response(packet, {});
+}
 
-            std::unique_lock lock(mutex);
-            pause();
-            stopOnEntry = true; // not 100% correct: if request still running, pause will additionally cause a break on next mframe
-            return dap::PauseResponse();
-        });
+asio::awaitable<void> debugger_session::handle_threads(const json& packet)
+{
+	auto threads = json::array();
+	for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
+		for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+			auto threadName = !thread->next ? "bf2 (main)" : std::format("bf2 ({})", thread->thread_id);
+			threads.push_back({
+				{ "id", thread->thread_id },
+				{ "name", threadName }
+				});
+		}
+	}
 
-        session->registerHandler([&](const dap::ContinueRequest&) -> dap::ResponseOrError<dap::ContinueResponse> {
-            std::unique_lock lock(mutex);
-            while (socket->isOpen() && state != Status::Stopped) {
-                statecv.wait_for(lock, std::chrono::milliseconds(100), [&] { return state == Status::Stopped; });
-            }
+	co_await async_send_response(packet, {
+		{ "threads", threads }
+		});
+}
 
-            set_continue();
-            return dap::ContinueResponse();
-        });
+asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
+{
+	const auto threadId = packet["arguments"]["threadId"].get<std::uint32_t>();
+	PyFrameObject* frame = nullptr;
+	if (threadId == _debugger.current_thread()) {
+		frame = _debugger.current_frame();
+	}
+	else {
+		for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
+			for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+				if (thread->thread_id == threadId) {
+					frame = thread->frame;
+					break;
+				}
+			}
+		}
+	}
 
-        session->registerSentHandler([&](const dap::ResponseOrError<dap::ContinueResponse>&) {
-            std::unique_lock lock(mutex);
-            state = Status::Running;
-            statecv.notify_all();
-        });
+	if (frame == nullptr) {
+		co_await async_send_response(packet, {
+			{ "error", std::format("Invalid threadId '{}'", threadId) }
+			}, false);
+		co_return;
+	}
 
-        session->registerHandler([&](const dap::NextRequest&) {
-            std::unique_lock lock(mutex);
-            if (state != Status::Stopped) {
-                statecv.wait(lock, [&] { return state == Status::Stopped; });
-            }
+	auto stackFrames = json::array();
+	for (std::uint32_t frameId = 1; frame; frame = frame->f_back, frameId++) {
+		assert(frame->f_code && "f_code is never NULL");
 
-            set_next(curframe);
-            state = Status::Running;
-            statecv.notify_all();
-            return dap::NextResponse();
-        });
+		auto filename = _debugger.canonic(PyString_AsString(frame->f_code->co_filename));
+		auto source = json::object();
+		source["name"] = filename;
 
-        session->registerHandler([&](const dap::StepInRequest&) {
-            std::unique_lock lock(mutex);
-            if (state != Status::Stopped) {
-                statecv.wait(lock, [&] { return state == Status::Stopped; });
-            }
+		if (filename.starts_with("<") && filename.ends_with(">")) {
+			auto sourceRef = _last_source_id++;
+			source["sourceReference"] = sourceRef;
+			_source_refs.emplace(sourceRef, frame);
+		}
+		else if (filename.contains(".zip")) {
+			auto sourceRef = _last_source_id++;
+			source["sourceReference"] = sourceRef;
+			_source_refs.emplace(sourceRef, filename);
+		}
+		else {
+			source["path"] = filename;
+		}
 
-            set_step();
-            state = Status::Running;
-            statecv.notify_all();
-            return dap::StepInResponse();
-        });
+		_frame_refs[frameId] = frame;
+		stackFrames.push_back({
+			{ "id", frameId },
+			{ "name", PyString_AsString(frame->f_code->co_name) },
+			{ "line", frame->f_lineno },
+			{ "column", 1 },
+			{ "source", source }
+			});
+	}
 
-        session->registerHandler([&](const dap::StepOutRequest&) {
-            std::unique_lock lock(mutex);
-            if (state != Status::Stopped) {
-                statecv.wait(lock, [&] { return state == Status::Stopped; });
-            }
+	co_await async_send_response(packet, {
+		{ "stackFrames", stackFrames }
+		});
+}
 
-            set_return(curframe);
-            state = Status::Running;
-            statecv.notify_all();
-            return dap::StepOutResponse();
-        });
+asio::awaitable<void> debugger_session::handle_scopes(const json& packet)
+{
+	const auto frameId = packet["arguments"]["frameId"].get<std::uint32_t>();
+	const auto it = _frame_refs.find(frameId);
+	if (it == _frame_refs.end()) {
+		co_await async_send_response(packet, {
+			{ "error", std::format("Invalid frameId '{}'", frameId) }
+			}, false);
+		co_return;
+	}
 
-        session->registerHandler([&](const dap::DisconnectRequest&) {
-            terminate.fire();
-            return dap::DisconnectResponse{};
-        });
+	auto scopes = json::array();
+	const auto& frame = it->second;
+	if (frame->f_locals) {
+		const auto refId = pyObjectHash(frame->f_locals);
+		scopes.push_back({
+				{ "name", "Locals" },
+				{ "presentationHint", "locals" },
+				{ "variablesReference", refId }
+			});
+		_var_refs[refId] = frame->f_locals;
+	}
 
-        session->registerHandler([&](const dap::StackTraceRequest& request) -> dap::ResponseOrError<dap::StackTraceResponse> {
-            if (request.threadId != thread_id) {
-                return dap::Error("Unknown threadId '%d'", int(request.threadId));
-            }
+	if (frame->f_globals && frame->f_globals != frame->f_locals) {
+		const auto refId = pyObjectHash(frame->f_globals);
+		scopes.push_back({
+				{ "name", "Globals" },
+				{ "variablesReference", refId }
+			});
+		_var_refs[refId] = frame->f_globals;
+	}
 
-            dap::StackTraceResponse response;
-            std::unique_lock lock(mutex);
-            dap::integer frameId;
-            for (const auto& s : stack) {
-                auto pyFrame = s.first;
-                assert(pyFrame->f_code && "f_code is never NULL");
+	co_await async_send_response(packet, {
+			{ "scopes", scopes }
+		});
+}
 
-                dap::StackFrame frame;
-                frame.id = frameId++;
-                frame.line = s.second;
-                frame.column = 1;
-                frame.name = PyString_AsString(pyFrame->f_code->co_name);
+asio::awaitable<void> debugger_session::handle_variables(const json& packet)
+{
+	const auto varId = packet["arguments"]["variablesReference"].get<std::uint32_t>();
+	auto it = _var_refs.find(varId);
+	if (it == _var_refs.end()) {
+		co_await async_send_response(packet, {
+				{ "error", std::format("Invalid variablesReference '{}'", varId) }
+			}, false);
+		co_return;
+	}
 
-                auto filename = canonic(PyString_AsString(pyFrame->f_code->co_filename));
-                dap::Source source;
-                source.name = filename;
-                if (filename.starts_with("<") && filename.ends_with(">")) {
-                    // can only resolve by frame, not by filename
-                    source.sourceReference = last_source_id++;
-                    source_refs.emplace(*source.sourceReference, pyFrame);
-                }
-                else if (filename.contains(".zip")) {
-                    source.sourceReference = last_source_id++;
-                    source_refs.emplace(*source.sourceReference, filename);
-                }
-                else {
-                    // filename contains full path
-                    source.path = filename;
-                }
+	// currently only dicts are stored in var_refs
+	PyObject* dict = it->second;
+	PyObject* key, * value;
+	int pos = 0;
 
-                frame.source = source;
-                response.stackFrames.push_back(frame);
-            }
+	auto variables = json::array();
+	while (PyDict_Next(dict, &pos, &key, &value)) {
+		std::string type;
+		std::uint32_t varId = 0;
+		if (PyInt_Check(value)) {
+			type = "int";
+		}
+		else if (PyFloat_Check(value)) {
+			type = "float";
+		}
+		else if (PyString_Check(value)) {
+			type = "string";
+		}
+		else if (PyBool_Check(value)) {
+			type = "bool";
+		}
+		else if (PyList_Check(value)) {
+			type = "list";
+		}
+		else if (PyDict_Check(value)) {
+			type = "dict";
+			varId = pyObjectHash(key);
+			_var_refs[varId] = value;
+		}
+		else {
+			type = "object";
+		}
 
-            std::ranges::reverse(response.stackFrames);
+		PyObject* keyStr = PyObject_Str(key);
+		PyObject* valueStr = PyObject_Str(value);
+		auto variable = json::object({
+			{ "name", PyString_AsString(keyStr) },
+			{ "type", type },
+			{ "value", PyString_AsString(valueStr) },
+			{ "variablesReference", varId }
+			});
 
-            return response;
-        });
+		Py_DECREF(valueStr);
+		Py_DECREF(keyStr);
 
-        session->registerHandler([&](const dap::SourceRequest& request) -> dap::ResponseOrError<dap::SourceResponse> {
-            if (request.sourceReference == 0 && !request.source.has_value()) {
-                return dap::Error("Invalid SourceRequest");
-            }
+		variables.push_back(variable);
+	}
 
-            std::unique_lock lock(mutex);
-            auto cit = source_cache.find(request.sourceReference);
-            if (cit != source_cache.end()) {
-                dap::SourceResponse response;
-                response.content = cit->second;
-                return response;
-            }
+	co_await async_send_response(packet, {
+		{ "variables", variables }
+		});
+}
 
-            auto it = source_refs.find(request.sourceReference);
-            if (it == source_refs.end()) {
-                return dap::Error("Unknown source reference '%d'", int(request.sourceReference));
-            }
+asio::awaitable<void> debugger_session::handle_source(const json& packet)
+{
+	const auto sourceRef = packet["arguments"]["sourceReference"].get<std::uint32_t>();
+	const auto cit = _source_cache.find(sourceRef);
+	if (cit != _source_cache.end()) {
+		co_await async_send_response(packet, {
+			{ "content", cit->second }
+			});
+		co_return;
+	}
 
-            auto visitor = [&](auto&& arg) -> std::string {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, PyFrameObject*>) {
-                    return dis(arg->f_code);
-                }
-                else if constexpr (std::is_same_v<T, std::string>) {
-                    auto filename = arg;
-                    auto it = zipcache.find(filename);
-                    if (it != zipcache.end()) {
-                        return it->second;
-                    }
-                    else {
-                        try {
-                            if (filename.contains(".zip")) {
-                                auto path = filename.substr(0, filename.find(".zip") + 4);
-                                libzippp::ZipArchive zf(path);
-                                zf.open(libzippp::ZipArchive::ReadOnly);
-                                libzippp::ZipEntry entry = zf.getEntry(filename.substr(filename.find(".zip") + 5));
-                                auto it = zipcache.emplace(filename, entry.readAsText());
-                                return it.first->second;
-                            }
-                            return filename;
-                        }
-                        catch (const std::exception& e) {
-                            log(std::format("err: {}", e.what()));
-                            return std::format("err: {}", e.what());
-                        }
-                    }
-                }
-                };
+	auto rit = _source_refs.find(sourceRef);
+	if (rit == _source_refs.end()) {
+		co_await async_send_response(packet, {
+			{ "error", std::format("Invalid source reference '{}'", sourceRef) }
+			}, false);
+		co_return;
+	}
 
-            dap::SourceResponse response;
-            response.content = std::visit(visitor, it->second);
-            source_cache.emplace(request.sourceReference, response.content);
-            return response;
-        });
+	auto visitor = [&](auto&& arg) -> std::string {
+		using T = std::decay_t<decltype(arg)>;
+		if constexpr (std::is_same_v<T, PyFrameObject*>) {
+			return dis(arg->f_code);
+		}
+		else if constexpr (std::is_same_v<T, std::string>) {
+			auto filename = arg;
+			auto it = _zipcache.find(filename);
+			if (it != _zipcache.end()) {
+				return it->second;
+			}
+			else {
+				try {
+					if (filename.contains(".zip")) {
+						auto path = filename.substr(0, filename.find(".zip") + 4);
+						libzippp::ZipArchive zf(path);
+						zf.open(libzippp::ZipArchive::ReadOnly);
+						libzippp::ZipEntry entry = zf.getEntry(filename.substr(filename.find(".zip") + 5));
+						auto it = _zipcache.emplace(filename, entry.readAsText());
+						return it.first->second;
+					}
+					return filename;
+				}
+				catch (const std::exception& e) {
+					return std::format("err: {}", e.what());
+				}
+			}
+		}
+		};
 
-        session->registerHandler([&](const dap::SetExceptionBreakpointsRequest& request) {
-            // 'never', 'always', 'unhandled', 'userUnhandled'
-            auto exmode = bdb::exception_mode::NEVER;
-            if (request.exceptionOptions) {
-                for (const auto& option : *request.exceptionOptions) {
-                    if (option.breakMode == "never") {
-                        exmode = bdb::exception_mode::NEVER;
-                    }
-                    else if (option.breakMode == "always") {
-                        exmode = bdb::exception_mode::ALL_EXCEPTIONS;
-                    }
-                    else if (option.breakMode == "unhandled") {
-                        exmode = bdb::exception_mode::UNHANDLED_EXCEPTION;
-                    }
-                }
+	const auto content = std::visit(visitor, rit->second);
+	_source_cache.emplace(sourceRef, content);
+	co_await async_send_response(packet, {
+		{ "content", content }
+		});
+}
 
-                std::unique_lock lock(mutex);
-                set_exception_mode(exmode);
-            }
-            return dap::SetExceptionBreakpointsResponse{};
-        });
+asio::awaitable<void> debugger_session::handle_setBreakpoints(const json& packet)
+{
+	auto path = packet["arguments"]["source"].value("path", std::string());
+	auto response = json::object();
+	if (!path.empty()) {
+		std::ranges::transform(path, path.begin(), [](auto c) { return std::tolower(c); });
 
-        session->registerHandler([&](const dap::SetBreakpointsRequest& request) {
-            dap::SetBreakpointsResponse response;
+		auto& fileBreaks = _debugger.breaks()[path];
+		fileBreaks.clear();
 
-            std::unique_lock lock(mutex);
-            if (request.source.path.has_value()) {
-                auto path = request.source.path.value();
-                std::ranges::transform(path, path.begin(), [](auto c) { return std::tolower(c); });
+		auto validatedBreaks = json::array();
+		for (const auto& bp : packet["arguments"].value("breakpoints", json::array())) {
+			const auto line = bp["line"].get<std::uint32_t>();
+			fileBreaks[line].push_back(
+				Breakpoint(path, line, false, bp.value("condition", ""))
+			);
+			validatedBreaks.push_back({
+				{ "verified", true }
+				});
+		}
+		response["breakpoints"] = validatedBreaks;
+	}
 
-                auto& fileBreaks = breaks[path];
-                fileBreaks.clear();
+	co_await async_send_response(packet, response);
+}
 
-                const auto& breakpoints = request.breakpoints.value({});
-                response.breakpoints.resize(breakpoints.size());
+asio::awaitable<void> debugger_session::handle_setExceptionBreakpoints(const json& packet)
+{
+	auto exmode = bdb::exception_mode::NEVER;
+	for (const auto& filter : packet["arguments"]["filters"]) {
+		if (filter == "never") {
+			exmode = bdb::exception_mode::NEVER;
+		}
+		else if (filter == "always") {
+			exmode = bdb::exception_mode::ALL_EXCEPTIONS;
+		}
+		else if (filter == "unhandled") {
+			exmode = bdb::exception_mode::UNHANDLED_EXCEPTION;
+		}
+	}
 
-                std::size_t i = 0;
-                for (const auto& bp : breakpoints) {
-                    fileBreaks[bp.line].push_back(Breakpoint(path, bp.line, false, bp.condition.value("")));
-                    response.breakpoints[i++].verified = true;
-                }
-            }
+	_debugger.set_exception_mode(exmode);
 
-            return response;
-        });
+	co_await async_send_response(packet, {});
+}
 
-        initialized.wait_for(std::chrono::seconds(500));
-        if (!initialized) {
-            std::println("Server closing connection");
-            socket->close();
-            return;
-        }
+asio::awaitable<void> debugger_session::handle_pause(const json& packet)
+{
+	_debugger.pause();
+	co_await async_send_response(packet, {});
+}
 
-        {
-            std::unique_lock lock(mutex);
-            sessions.emplace_back(socket, session, &terminate);
-            send_mod_path();
-            statecv.notify_all();
-        }
-        terminate.wait();
-        {
-            std::unique_lock lock(mutex);
-            auto it = std::find_if(sessions.begin(), sessions.end(), [&](const auto& s) { return s.socket == socket; });
-            sessions.erase(it);
-            socket->close();
+asio::awaitable<void> debugger_session::handle_continue(const json& packet)
+{
+	_debugger.set_continue();
+	_debugger.state(debugger::Status::Running);
+	co_await async_send_response(packet, {});
+}
 
-            std::println("Server closing connection");
-            if (sessions.empty()) {
-                state = Status::Running;
-                statecv.notify_all();
-            }
-        }
-    };
+asio::awaitable<void> debugger_session::handle_next(const json& packet)
+{
+	_debugger.set_next(_debugger.current_frame());
+	_debugger.state(debugger::Status::Running);
+	co_await async_send_response(packet, {});
+}
 
-    if (stopOnEntry) {
-        //set_step();
-    }
+asio::awaitable<void> debugger_session::handle_stepIn(const json& packet)
+{
+	_debugger.set_step();
+	_debugger.state(debugger::Status::Running);
+	co_await async_send_response(packet, {});
+}
 
-    server->start(port, onClientConnected, [&](const char* msg) {
-        std::println("Server error: {}", msg);
-    });
-    std::println("server waiting on {}", port);
+asio::awaitable<void> debugger_session::handle_stepOut(const json& packet)
+{
+	_debugger.set_return(_debugger.current_frame());
+	_debugger.state(debugger::Status::Running);
+	co_await async_send_response(packet, {});
+}
+
+asio::awaitable<void> debugger_session::handle_disconnect(const json& packet)
+{
+	co_await async_send_response(packet, {});
+	_socket.close();
 }

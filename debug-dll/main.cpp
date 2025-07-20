@@ -1,3 +1,4 @@
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <detours/detours.h>
 #include "python.h"
@@ -7,29 +8,43 @@
 #include "dis.h"
 
 LONG commitError = 0;
+auto bf2_AllocConsole = ::AllocConsole;
 auto bf2_Py_Initialize = ::Py_Initialize;
 auto bf2_Py_InitModule4 = ::Py_InitModule4;
+auto bf2_PyEval_InitThreads = ::PyEval_InitThreads;
 auto bf2_Py_Finalize = ::Py_Finalize;
-auto bf2_PyErr_PrintEx = ::PyErr_PrintEx;
 std::unique_ptr<debugger> g_debug = nullptr;
 
-extern "C" __declspec(dllexport) void pyInitialize()
+BOOL __stdcall allocConsole()
 {
-    // before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
+	auto res = bf2_AllocConsole();
+
+	// stdout needs to be reinitialized after the console is allocated
+    FILE* f;
+    freopen_s(&f, "CONOUT$", "w", stdout);
+
+    if (g_debug) {
+        g_debug->start_redirect_output();
+    }
+
+	return res;
+}
+static_assert(std::is_same_v<decltype(bf2_AllocConsole), decltype(&allocConsole)>, "bf2 and pydebug AllocConsole signature must match");
+
+void pyInitialize()
+{
+    // note: before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
     bf2_Py_Initialize();
-    // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']
 
     if (!debugger::pyInit()) {
         std::println("Failed to initialize debugger");
         return;
     }
 
-    if (!dist_init()) {
-		std::println("Failed to initialize disassembler");
-		return;
-    }
-
     g_debug->enable_trace();
+
+    // after bf2 calls Py_Initialize() it sets the path variable to ['pylib-2.3.4.zip', 'python', 'mods/bf2/python', 'admin']
+	// any initializeation done here which depends on python modules need to do their own path initialization
 }
 static_assert(std::is_same_v<decltype(bf2_Py_Initialize), decltype(&pyInitialize)>, "bf2 and pydebug Py_Initialize signature must match");
 
@@ -51,7 +66,11 @@ PyObject* logWrite(PyObject* self, PyObject* args)
     return Py_None;
 }
 
-extern "C" __declspec(dllexport) PyObject* pyInitModule4(char* name, PyMethodDef* methods, char* doc, PyObject* self, int apiver)
+#if PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION < 7
+PyObject* pyInitModule4(char* name, PyMethodDef* methods, char* doc, PyObject* self, int apiver)
+#else
+PyObject* pyInitModule4(const char* name, PyMethodDef* methods, const char* doc, PyObject* self, int apiver)
+#endif
 {
 	if (strcmp(name, "host") == 0) {
         bf2_logWrite = methods[0].ml_meth;
@@ -71,11 +90,20 @@ extern "C" __declspec(dllexport) PyObject* pyInitModule4(char* name, PyMethodDef
 }
 static_assert(std::is_same_v<decltype(bf2_Py_InitModule4), decltype(&pyInitModule4)>, "bf2 and pydebug Py_InitModule4 signature must match");
 
-extern "C" __declspec(dllexport) void pyFinalize()
+void pyEval_InitThreads()
 {
-    PyEval_SetTrace(nullptr, nullptr);
+    bf2_PyEval_InitThreads();
+    if (g_debug) {
+        g_debug->enable_thread_trace();
+    }
+}
+static_assert(std::is_same_v<decltype(bf2_PyEval_InitThreads), decltype(&pyEval_InitThreads)>, "bf2 and pydebug PyEval_InitThreads signature must match");
+
+void pyFinalize()
+{
     if (g_debug) {
         g_debug->stop();
+        g_debug->disable_trace();
     }
 
     bf2_Py_Finalize();
@@ -84,23 +112,31 @@ static_assert(std::is_same_v<decltype(bf2_Py_Finalize), decltype(&pyFinalize)>, 
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
+	// Note: Any outputs will not be visible (if launched via bf2) until AllocConsole is called
     (void)hinst;
     (void)reserved;
-    
     if (DetourIsHelperProcess()) {
         return TRUE;
     }
 
     if (dwReason == DLL_PROCESS_ATTACH) {
+		// by default, we stop on entry, unless the command line specifies otherwise
         std::string cmd = GetCommandLineA();
         bool dontStopOnEntry = cmd.contains("+pyDebugStopOnEntry=0");
         g_debug.reset(new debugger(!dontStopOnEntry));
-        g_debug->start();
+        g_debug->start();      
 
         DetourRestoreAfterWith();
         DetourTransactionBegin();
+        // enable output to debugger console redirection
+        DetourAttach((PVOID*)&bf2_AllocConsole, allocConsole);
+		// initialize the debugger when bf2 calls Py_Initialize
         DetourAttach((PVOID*)&bf2_Py_Initialize, pyInitialize);
+        // when bf2 initializes the host module, we modify the log function (redirect output to the debugger)
         DetourAttach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
+        // when threads are enabled, we start thread tracing
+		DetourAttach((PVOID*)&bf2_PyEval_InitThreads, pyEval_InitThreads);
+		// shutdown the debugger when bf2 calls Py_Finalize
         DetourAttach((PVOID*)&bf2_Py_Finalize, pyFinalize);
         DetourUpdateThread(GetCurrentThread());
         commitError = DetourTransactionCommit();
@@ -113,8 +149,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
             DetourTransactionBegin();
             DetourUpdateThread(GetCurrentThread());
             DetourDetach((PVOID*)&bf2_Py_Finalize, pyFinalize);
+			DetourDetach((PVOID*)&bf2_PyEval_InitThreads, pyEval_InitThreads);
             DetourDetach((PVOID*)&bf2_Py_InitModule4, pyInitModule4);
             DetourDetach((PVOID*)&bf2_Py_Initialize, pyInitialize);
+            DetourDetach((PVOID*)&bf2_AllocConsole, allocConsole);
             commitError = DetourTransactionCommit();
         }
     }

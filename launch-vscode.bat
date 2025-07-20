@@ -1,20 +1,18 @@
 @echo off
 setlocal enabledelayedexpansion
-goto :launchvscode
 
-REM 2024/05/20 mkr: remove bf2 workspace folder are added by the vscode plugin
-REM check for battlefield 2 in the current directory, then in bf2.props
+:: check for battlefield 2 in the current directory, then in bf2.props
 if not exist ".\bf2_w32ded.exe" (
   for /f "tokens=*" %%i in ('findstr /c:"<BF2_DIR>" bf2.props') do set "bf2dir=%%i"
   set "bf2dir=!bf2dir:~9,-10!"
 )
 
-REM check for battlefield 2 server installation (registry)
+:: check for battlefield 2 server installation (registry)
 if not exist "%bf2dir%\bf2_w32ded.exe" (
   for /f "tokens=2* skip=2" %%a in ('reg query "HKLM\SOFTWARE\EA GAMES\Battlefield 2 Server" /v "GAMEDIR" /reg:32') do set "bf2dir=%%b"
 )
 
-REM check for battlefield 2 client (also contains the server) installation (registry)
+:: check for battlefield 2 client (also contains the server) installation (registry)
 if not exist "%bf2dir%\bf2_w32ded.exe" (
   for /f "tokens=2* skip=2" %%a in ('reg query "HKLM\SOFTWARE\Electronic Arts\EA Games\Battlefield 2" /v "InstallDir" /reg:32') do set "bf2dir=%%b"
 )
@@ -25,11 +23,10 @@ if not exist "%bf2dir%\bf2_w32ded.exe" (
   exit /b 1
 )
 
-:launchvscode
-REM check if VS Code installation is in PATH
+:: check if VS Code installation is in PATH
 where code >nul 2>nul
 if %errorlevel% == 0 (
-  code --extensionDevelopmentPath="%~dp0vscode-ext" "vscode-ext/workspace"
+  code "%bf2dir%/python"
   goto :exit
 )
 
@@ -48,7 +45,7 @@ if not defined vscodePath (
   goto :exit
 )
 
-"%vscodePath%" --extensionDevelopmentPath=%~dp0vscode-ext "vscode-ext/workspace"
+"%vscodePath%" "%bf2dir%/python"
 :exit
 endlocal
 exit /b 0

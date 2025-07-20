@@ -1,7 +1,8 @@
 {
   "dependencies": [
+    "asio",
     "detours",
-    "cppdap",
+    "nlohmann-json",
     "libzippp"
   ]
 }

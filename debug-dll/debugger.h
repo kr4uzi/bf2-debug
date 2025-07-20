@@ -1,82 +1,51 @@
 #pragma once
+#include "asio.h"
 #include "bdb.h"
-#include <dap/types.h>
-template <>
-struct std::hash<dap::integer>
-{
-	auto operator()(const dap::integer& k) const
-	{
-		std::int64_t val{ k };
-		return val;
-	}
-};
-
-#include <io.h>
-#include <dap/network.h>
-#include <dap/session.h>
-#include <mutex>
-#include <variant>
+#include "debugger_session.h"
+#include <cstdint>
 #include <map>
-#include <chrono>
-
-class Event {
-public:
-	// wait() blocks until the event is fired.
-	void wait();
-	template< class Rep, class Period >
-	void wait_for(const std::chrono::duration<Rep, Period>& time)
-	{
-		std::unique_lock lock(mutex);
-		cv.wait_for(lock, time, [&] { return fired; });
-	}
-
-	// fire() sets signals the event, and unblocks any calls to wait().
-	void fire();
-
-	operator bool() const noexcept { return fired; }
-
-private:
-	std::mutex mutex;
-	std::condition_variable cv;
-	bool fired = false;
-};
+#include <optional>
+#include <thread>
+#include <variant>
 
 class debugger : public bdb {
-	std::condition_variable statecv;
-	std::size_t thread_id;
-	bool stopOnEntry;
-
+public:
 	enum class Status {
 		Running,
 		Stopped
-	} state = Status::Running;
-
-	struct sess {
-		std::shared_ptr<dap::ReaderWriter> socket;
-		std::shared_ptr<dap::Session> session;
-		Event* terminate;
 	};
 
-	std::deque<std::pair<PyFrameObject*, std::size_t>> stack;
-	std::size_t curindex = 0;
-	PyFrameObject* curframe = nullptr;
+	using thread_id_t = decltype(PyThreadState::thread_id);
 
-	std::unordered_map<dap::integer, PyObject*> var_refs;
-	dap::integer last_source_id;
-	std::unordered_map<dap::integer, std::string> source_cache;
-	std::unordered_map<dap::integer, std::variant<std::string, PyFrameObject*>> source_refs;
-	std::unique_ptr<dap::net::Server> server;
-	std::vector<sess> sessions;
-	std::unordered_map<std::string, std::string> zipcache;
-	std::map<std::string, PyCFunction> hostModule;
+private:
+	asio::io_context _ctx;
+	asio::ip::port_type _port;
+	bool _wait_for_connection;
+	int _output_fd[2] = { -1, -1 }; // read, write
+	std::jthread _io_runner, _output_redirector;
+	int _original_stdout_fd = -1;
+	std::optional<debugger_session> _session;
+
+	Status _state = Status::Running;
+
+	std::deque<std::pair<PyFrameObject*, std::size_t>> _stack;
+	std::size_t _curindex = 0;
+	PyFrameObject* _curframe = nullptr;
+	thread_id_t _curthread = -1;
+
+	std::map<std::string, PyCFunction> _hostModule;
 
 public:
-	debugger(bool stopOnEntry);
+	debugger(bool stopOnEntry, asio::ip::port_type port = 5678);
 
-	void setHostModule(const decltype(hostModule)& _hostModule);
+	virtual int trace_dispatch(PyFrameObject* frame, int event, PyObject* arg);
 
-	void start(int port = 19021);
+	void setHostModule(const decltype(_hostModule)& _hostModule);
+
+	void start();
 	void stop();
+	void start_redirect_output();
+	void stop_redirect_output();
 
 	void log(const std::string& msg);
 	template<typename... Args>
@@ -84,34 +53,34 @@ public:
 	{
 		log(std::vformat(fmt, std::make_format_args(args...)));
 	}
-	
+
+	const auto& stack() const { return _stack; }
+	auto& breaks() { return _breaks; }
+	const auto& current_frame() const { return _curframe; }
+	const auto& current_thread() const { return _curthread; }
+	auto state() const { return _state; }
+	void state(decltype(_state) state) { _state = state; }
+
 private:
-	virtual void user_entry(std::unique_lock<std::mutex>& lock, PyFrameObject* frame) override;
-	virtual void user_call(std::unique_lock<std::mutex>& lock, PyFrameObject* frame) override;
-	virtual void user_line(std::unique_lock<std::mutex>& lock, PyFrameObject* frame) override;
-	virtual void user_return(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg) override;
-	virtual void user_exception(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg) override;
+	asio::awaitable<void> run();
+	void start_io_runner();
+
+	virtual void user_entry(PyFrameObject* frame) override;
+	virtual void user_call(PyFrameObject* frame) override;
+	virtual void user_line(PyFrameObject* frame) override;
+	virtual void user_return(PyFrameObject* frame, PyObject* arg) override;
+	virtual void user_exception(PyFrameObject* frame, PyObject* arg) override;
 	virtual void on_breakpoint_error(Breakpoint& bp, const std::string& message) override;
 	virtual void do_clear(Breakpoint& bp) override;
 
-	void send_mod_path();
-
-	void interaction(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* traceback);
+	void interaction(PyFrameObject* frame, PyObject* traceback);
 	void setup(PyFrameObject* frame, PyObject* traceback);
 	void forget();
 
-	template <typename T>
-	void send(const T& event)
+	void run_until(auto fn)
 	{
-		for (auto it = sessions.begin(); it != sessions.end();) {
-			if (!it->socket->isOpen()) {
-				it->terminate->fire();
-				it = sessions.erase(it);
-			}
-			else {
-				it->session->send(event);
-				++it;
-			}
+		while (!fn()) {
+			_ctx.run_one();
 		}
 	}
 };

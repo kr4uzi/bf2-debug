@@ -1,6 +1,2 @@
-#pragma once
-#pragma warning(push)
-// remove warnings about register members
-#pragma warning(disable:5033)
-#include <Python.h>
-#pragma warning(pop)
+// the debug-dll contains the code we need, so no need to duplicate it here
+#include "../debug-dll/python.h"

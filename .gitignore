@@ -433,6 +433,9 @@ FodyWeavers.xsd
 *.out
 *.app
 
-vcpkg_installed
-/bf2.props
-/dice_py.exp
+vcpkg_installed/
+python-*/
+bf2.props
+dice_py.exp
+dice_py.def
+dice_py.lib

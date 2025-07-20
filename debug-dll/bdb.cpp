@@ -3,42 +3,30 @@
 #include <filesystem>
 #include <string_view>
 
-PyObject* (*frame_getlineno)(PyFrameObject*, void*);
-PyObject* quitError = nullptr;
-thread_local bdb* thread_debugger = nullptr;
+namespace {
+    PyObject* quit_error = nullptr;
 
-bool bdb::pyInit()
-{
-    static bool initialized = false;
-    if (initialized) {
-        return true;
-    }
+    // like PyCapsule (which doesn't exist in python 2.3.4)
+    struct bf2PyDebugger : PyObject {
+        bdb* debugger;
+    };
 
-    if (!quitError) {
-        char exceptionName[] = "bf2.BdbQuit";
-        quitError = PyErr_NewException(exceptionName, nullptr, nullptr);
-        if (!quitError) {
-            std::println(stderr, "Failed to create BdbQuit exception");
-        }
-    }
-
-    if (!frame_getlineno) {
-        using namespace std::string_view_literals;
-        for (auto getset = PyFrame_Type.tp_getset; getset && getset->name != nullptr; ++getset) {
-            if (getset->name == "f_lineno"sv) {
-                frame_getlineno = reinterpret_cast<decltype(frame_getlineno)>(getset->get);
-                break;
-            }
-        }
-    }
-
-    initialized = quitError && frame_getlineno;
-    return initialized;
+    PyTypeObject bf2PyDebuggerType = {
+        .ob_refcnt = 1,
+        .ob_type = &PyType_Type,
+        .tp_name = (char*)"bf2py.Debugger",
+        .tp_basicsize = sizeof(bf2PyDebugger)
+    };
 }
 
-void raiseException(const std::string& message)
+void bdb::raiseException(const std::string& message)
 {
-    PyErr_SetString(quitError, message.c_str());
+    PyErr_SetString(quit_error, message.c_str());
+}
+
+bdb::bdb()
+{
+
 }
 
 bdb::~bdb()
@@ -46,25 +34,120 @@ bdb::~bdb()
     disable_trace();
 }
 
-void bdb::enable_trace()
+bool bdb::pyInit()
 {
-    if (thread_debugger) {
-        throw std::runtime_error("enable_trace can only be called once per thread!");
+    if (quit_error == nullptr) {
+        char name[] = "bf2.BdbQuit";
+        quit_error = PyErr_NewException(name, nullptr, nullptr);
     }
 
-    thread_debugger = this;
+    if (!quit_error) {
+        std::println(stderr, "Failed to create BdbQuit exception");
+    }
 
-    // as we only trace a single thread, we only have once trace function and can therefore
-    // save the conversion cost of PyCObject_FromVoidPtr and PyCObject_AsVoidPtr
-    PyEval_SetTrace([](PyObject* obj, PyFrameObject* frame, int event, PyObject* arg) -> int {
-        (void)obj;
-        return thread_debugger->trace_dispatch(frame, event, arg);
-    }, nullptr);
+    static bool typeInitialized = false;
+    if (!typeInitialized) {
+        bf2PyDebuggerType.tp_call = [](PyObject* self, PyObject* args, PyObject* kwds) -> PyObject* {
+            // the very first trace call is initiated via /Python/sysmodule.c/trace_trampoline
+            // which has slightly more overhead than our own trace_dispatch and which works slightly different
+            PyEval_SetTrace(
+                [](PyObject* obj, PyFrameObject* frame, int event, PyObject* arg) -> int {
+                    return reinterpret_cast<bf2PyDebugger*>(obj)->debugger->trace_dispatch(frame, event, arg);
+                },
+                reinterpret_cast<PyObject*>(self)
+			);
+
+            // after the first call, python's trace will no longer ues the trace_trampoline, but instead our own function
+            Py_INCREF(Py_None);
+            return Py_None;
+            };
+
+        typeInitialized = PyType_Ready(&bf2PyDebuggerType) == 0;
+    }
+
+    if (!typeInitialized) {
+        std::println(stderr, "Failed to initialize bf2py debugger type");
+    }
+
+    return !!quit_error && typeInitialized;
+}
+
+bool bdb::enable_trace()
+{
+    if (!_pyDebugger) {
+        auto* self = PyObject_NEW(bf2PyDebugger, &bf2PyDebuggerType);
+        if (!self) {
+            std::println(stderr, "Failed to create bf2PyDebugger instance");
+			return false;
+		}
+
+        self->debugger = this;
+		Py_INCREF(self);
+
+        _pyDebugger = self;
+	}
+
+	PyEval_SetTrace(
+        [](PyObject* obj, PyFrameObject* frame, int event, PyObject* arg) -> int {
+            return reinterpret_cast<bf2PyDebugger*>(obj)->debugger->trace_dispatch(frame, event, arg);
+        },
+        reinterpret_cast<PyObject*>(_pyDebugger)
+    );
+
+    return true;
+}
+
+bool bdb::enable_thread_trace()
+{
+    auto threadingModule = PyImport_ImportModule((char*)"threading");
+    if (!threadingModule) {
+        std::println(stderr, "Failed to import threading module");
+        return false;
+    }
+
+    auto setTrace = PyObject_GetAttrString(threadingModule, (char*)"settrace");
+    if (!setTrace) {
+        std::println(stderr, "Failed to get settrace from threading module");
+        Py_DECREF(threadingModule);
+        return false;
+    }
+
+	// register the callback which is implemented in bf2PyDebuggerType.tp_call
+    // (the debugger object itself is callable)
+    auto res = PyObject_CallFunction(setTrace, (char*)"O", _pyDebugger);
+    if (res) {
+        Py_DECREF(res);
+	}
+	else {
+        std::println(stderr, "Failed to call threading.settrace");
+    }
+
+    Py_DECREF(setTrace);
+    Py_DECREF(threadingModule);
+    return !!res;
 }
 
 void bdb::disable_trace()
 {
-    thread_debugger = nullptr;
+    if (_pyDebugger) {
+		Py_DECREF(_pyDebugger);
+        _pyDebugger = nullptr;
+
+        // the debugger might be destructed after Py_Finalize was called,
+        // in this case we must not call any more Py* functions
+        if (Py_IsInitialized()) {
+            // disable trace on all previously traced threads
+            for (auto interpreter = PyInterpreterState_Head(); interpreter; interpreter = PyInterpreterState_Next(interpreter)) {
+                for (auto thread = PyInterpreterState_ThreadHead(interpreter); thread; thread = PyThreadState_Next(thread)) {
+                    if (thread->c_traceobj && Py_TYPE(thread->c_traceobj) == &bf2PyDebuggerType) {
+                        auto currThread = PyThreadState_Swap(thread);
+                        PyEval_SetTrace(nullptr, nullptr);
+                        PyThreadState_Swap(currThread);
+                    }
+                }
+            }
+        }
+    }
 }
 
 std::string bdb::normalize_path(const std::string& filename)
@@ -78,23 +161,17 @@ std::string bdb::normalize_path(const std::string& filename)
 	return path;
 }
 
-decltype(PyFrameObject::f_lineno) bdb::frame_lineno(PyFrameObject* frame)
-{
-    auto lineno = frame_getlineno(frame, nullptr);
-    return PyInt_AS_LONG(lineno);
-}
-
 void bdb::reset()
 {
-    ignored_frames.clear();
-    step = false;
-    stopframe = nullptr;
-    returnframe = nullptr;
+    _ignored_frames.clear();
+    _step = false;
+    _stopframe = nullptr;
+    _returnframe = nullptr;
 }
 
 void bdb::pause()
 {
-    ignored_frames.clear();
+    _ignored_frames.clear();
     set_step();
 }
 
@@ -104,17 +181,18 @@ std::string bdb::canonic(const std::string& filename)
         return filename;
     }
 
-    auto iter = fncache.find(filename);
-    if (iter != fncache.end()) {
+    auto iter = _fncache.find(filename);
+    if (iter != _fncache.end()) {
         return iter->second;
     }
 
-    auto res = fncache.emplace(filename, normalize_path(filename));
+    auto res = _fncache.emplace(filename, normalize_path(filename));
     return res.first->second;
 }
 
 std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::get_stack(PyFrameObject* frame, PyObject* _traceback)
 {
+    // traceback object is not public (traceback.c) and I don't want to bother with C-API calls to retrieve the attributes
     struct _tracebackobject {
         PyObject_HEAD
         struct _tracebackobject* tb_next;
@@ -126,7 +204,6 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
     auto traceback = reinterpret_cast<_tracebackobject*>(_traceback);
     std::deque<std::pair<PyFrameObject*, std::size_t>> stack;
 
-    // traceback object is not public (traceback.c) and I don't want to bother with C-API calls
     if (traceback && frame == traceback->tb_frame) {
         traceback = traceback->tb_next;
     }
@@ -144,6 +221,7 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
             traceback->tb_lineno
         });
         traceback = traceback->tb_next;
+        std::println("traceback!");
     }
 
     return { stack, i };
@@ -151,37 +229,33 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
 
 int bdb::trace_dispatch(PyFrameObject* frame, int event, PyObject* arg)
 {
-    if (evaling) {
-        // evaluating a breakpoint condition - always happens recuresively (and when locked)
+    if (trace_ignore()) {
+        // evaluating a breakpoint condition - always happens recuresively
         return 0;
     }
 
-    std::unique_lock lock(mutex);
-    currentbp = nullptr;
-    if (quitting) {
-        return 0;
-    }
+    _currentbp = nullptr;
 
     switch (event) {
-    case PyTrace_CALL: return dispatch_call(lock, frame);
-    case PyTrace_EXCEPTION: return dispatch_exception(lock, frame, arg);
-    case PyTrace_LINE: return dispatch_line(lock, frame);
-    case PyTrace_RETURN: return dispatch_return(lock, frame, arg);
+    case PyTrace_CALL: return dispatch_call(frame);
+    case PyTrace_EXCEPTION: return dispatch_exception(frame, arg);
+    case PyTrace_LINE: return dispatch_line(frame);
+    case PyTrace_RETURN: return dispatch_return(frame, arg);
     }
 
     return 0;
 }
 
-int bdb::dispatch_line(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
+int bdb::dispatch_line(PyFrameObject* frame)
 {
-    if (ignored_frames.contains(frame)) {
+    if (_ignored_frames.contains(frame)) {
         return 0;
     }
 
     if (stop_here(frame) || break_here(frame)) {
-        user_line(lock, frame);
+        user_line(frame);
 
-        if (quitting) {
+        if (_quitting) {
             raiseException("quitting");
             return -1;
         }
@@ -190,20 +264,20 @@ int bdb::dispatch_line(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
     return 0;
 }
 
-int bdb::dispatch_call(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
+int bdb::dispatch_call(PyFrameObject* frame)
 {
     if (frame->f_back == nullptr) {
-        user_entry(lock, frame);
+        user_entry(frame);
     }
     else if (stop_here(frame) || break_anywhere(frame)) {
-        user_call(lock, frame);
+        user_call(frame);
     }
     else {
-        ignored_frames.insert(frame);
+        _ignored_frames.insert(frame);
         return 0;
     }
 
-	if (quitting) {
+	if (_quitting) {
 		raiseException("quitting");
 		return -1;
 	}
@@ -211,7 +285,7 @@ int bdb::dispatch_call(std::unique_lock<std::mutex>& lock, PyFrameObject* frame)
     return 0;
 }
 
-int bdb::dispatch_return(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg)
+int bdb::dispatch_return(PyFrameObject* frame, PyObject* arg)
 {
     // scope_exit doesn't exist yet :(
     // if the mainframe returns, no saved reference remains valid
@@ -224,20 +298,20 @@ int bdb::dispatch_return(std::unique_lock<std::mutex>& lock, PyFrameObject* fram
     };
     auto reset_guard = std::unique_ptr<void, decltype(resetter)>(nullptr, resetter);
 
-    auto it = ignored_frames.find(frame);
-    if (it != ignored_frames.end()) {
-        ignored_frames.erase(it);
+    auto it = _ignored_frames.find(frame);
+    if (it != _ignored_frames.end()) {
+        _ignored_frames.erase(it);
         return 0;
     }
 
-    if (frame == returnframe || stop_here(frame)) {
-        user_return(lock, frame, arg);
-        if (stopframe == frame) {
+    if (frame == _returnframe || stop_here(frame)) {
+        user_return(frame, arg);
+        if (_stopframe == frame) {
             // cannot stop on this frame again, so stop on parent frame
-            stopframe = frame->f_back;
+            _stopframe = frame->f_back;
         }
 
-        if (quitting) {
+        if (_quitting) {
 			raiseException("quitting");
 			return -1;
         }
@@ -246,16 +320,16 @@ int bdb::dispatch_return(std::unique_lock<std::mutex>& lock, PyFrameObject* fram
     return 0;
 }
 
-int bdb::dispatch_exception(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* exec)
+int bdb::dispatch_exception(PyFrameObject* frame, PyObject* exec)
 {
     if (
-        (exmode & exception_mode::ALL_EXCEPTIONS)
-        || (exmode & exception_mode::UNHANDLED_EXCEPTION && !is_cought(frame, exec))
+        (_exmode & exception_mode::ALL_EXCEPTIONS)
+        || (_exmode & exception_mode::UNHANDLED_EXCEPTION && !is_cought(frame, exec))
         || stop_here(frame)
         ) {
-        user_exception(lock, frame, exec);
+        user_exception(frame, exec);
 
-        if (quitting) {
+        if (_quitting) {
             raiseException("quitting");
             return -1;
         }
@@ -266,7 +340,7 @@ int bdb::dispatch_exception(std::unique_lock<std::mutex>& lock, PyFrameObject* f
 
 bool bdb::stop_here(PyFrameObject* frame) const
 {
-    if (step || frame == stopframe) {
+    if (_step || frame == _stopframe) {
         return true;
     }
 
@@ -276,8 +350,8 @@ bool bdb::stop_here(PyFrameObject* frame) const
 bool bdb::break_here(PyFrameObject* frame)
 {
     const auto filename = canonic(PyString_AsString(frame->f_code->co_filename));
-    auto breakIter = breaks.find(filename); 
-    if (breakIter == breaks.end()) {
+    auto breakIter = _breaks.find(filename); 
+    if (breakIter == _breaks.end()) {
         return false;
     }
 
@@ -308,9 +382,9 @@ bool bdb::break_here(PyFrameObject* frame)
             // Conditional bp.
             // Ignore count applies only to those bpt hits where the
             // condition evaluates to true.
-            evaling = true;
+            _evaling = true;
             const auto val = PyRun_String(bp->condition.c_str(), Py_eval_input, frame->f_globals, frame->f_locals);
-            evaling = false;
+            _evaling = false;
             if (!val) {
                 // if eval fails, most conservative
                 // thing is to stop on breakpoint
@@ -344,7 +418,7 @@ bool bdb::break_here(PyFrameObject* frame)
             do_clear(*bp);
         }
 
-        currentbp = &(*bp);
+        _currentbp = &(*bp);
         return true;
     }
 
@@ -365,58 +439,58 @@ bool bdb::is_cought(PyFrameObject* frame, PyObject* exec)
 bool bdb::break_anywhere(PyFrameObject* frame)
 {
     const auto filename = canonic(PyString_AsString(frame->f_code->co_filename));
-    auto contains = breaks.contains(filename);
+    auto contains = _breaks.contains(filename);
     return contains;
 }
 
 void bdb::set_step()
 {
     // exceptions can also occur in ignored frames, in this case "step into" must clear those
-    ignored_frames.clear();
-    step = true;
-    returnframe = nullptr;
-    quitting = false;
+    _ignored_frames.clear();
+    _step = true;
+    _returnframe = nullptr;
+    _quitting = false;
 }
 
 void bdb::set_next(PyFrameObject* frame)
 {
-    step = false;
-    stopframe = frame;
-    returnframe = nullptr;
-    quitting = false;
+    _step = false;
+    _stopframe = frame;
+    _returnframe = nullptr;
+    _quitting = false;
 }
 
 void bdb::set_return(PyFrameObject* frame)
 {
-    step = false;
-    stopframe = nullptr;
-    returnframe = frame;
-    quitting = false;
+    _step = false;
+    _stopframe = nullptr;
+    _returnframe = frame;
+    _quitting = false;
 }
 
 void bdb::set_continue()
 {
-    step = false;
-    stopframe = nullptr;
-    returnframe = nullptr;
-    quitting = false;
+    _step = false;
+    _stopframe = nullptr;
+    _returnframe = nullptr;
+    _quitting = false;
 }
 
 void bdb::set_quit()
 {
     reset();
-    PyEval_SetTrace(nullptr, nullptr);
+    _quitting = true;
 }
 
 void bdb::set_break(const std::string& _filename, line_t line, bool temporary, const std::string& cond)
 {
     const auto filename = canonic(_filename);
-    breaks[filename][line].emplace_back(filename, line, temporary, cond);
+    _breaks[filename][line].emplace_back(filename, line, temporary, cond);
 }
 
-void bdb::set_exception_mode(exception_mode _exmode)
+void bdb::set_exception_mode(exception_mode exmode)
 {
-    exmode = _exmode;
+    _exmode = exmode;
 }
 
 bdb::exception_mode operator|(bdb::exception_mode lhs, bdb::exception_mode rhs) {

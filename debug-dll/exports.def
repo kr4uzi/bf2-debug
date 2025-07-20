@@ -1,0 +1,3 @@
+LIBRARY "bf2py-debug"
+EXPORTS
+    DetourFinishHelperProcess @1

@@ -1,40 +1,24 @@
 #pragma once
-#include "python.h"
 #include "breakpoint.h"
+#include "python.h"
+#include <deque>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <deque>
-#include <mutex>
-#include <set>
-#include <optional>
-
-struct bottom_frame
-{
-    PyFrameObject* value = nullptr;
-
-    operator PyFrameObject* () const noexcept { return value; }
-    PyFrameObject* operator=(PyFrameObject* rhs) {
-        value = rhs;
-        return rhs;
-    }
-};
 
 class bdb
 {
-    std::set<PyFrameObject*> ignored_frames;
-    PyFrameObject* stopframe = nullptr;
-    bool step = false;
-    PyFrameObject* returnframe = nullptr;
-    std::unordered_map<std::string, std::string> fncache;
-    bool evaling = false;
+    std::set<PyFrameObject*> _ignored_frames;
+    bool _evaling = false;
+    bool _step = false;
+    PyFrameObject* _stopframe = nullptr;
+    PyFrameObject* _returnframe = nullptr;
+    std::unordered_map<std::string, std::string> _fncache;
 
 public:
     using line_t = Breakpoint::line_t;
-
-    static bool pyInit();
 	static std::string normalize_path(const std::string& filename);
-    static decltype(PyFrameObject::f_lineno) frame_lineno(PyFrameObject* frame);
 
     enum class exception_mode : unsigned char {
         NEVER = 0,
@@ -43,43 +27,52 @@ public:
         ALL_EXCEPTIONS = 3
     };
 
-protected:
-	std::mutex mutex;
-    bool quitting = false;
-    Breakpoint* currentbp = nullptr;
-    std::unordered_map<std::string, std::unordered_map<line_t, std::vector<Breakpoint>>> breaks;
-    exception_mode exmode = exception_mode::NEVER;
+    static std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> get_stack(PyFrameObject* frame, PyObject* traceback);
 
 protected:
-	virtual void user_entry(std::unique_lock<std::mutex>& lock, PyFrameObject* frame) = 0;
-    virtual void user_call(std::unique_lock<std::mutex>& lock, PyFrameObject* frame) = 0;
-    virtual void user_line(std::unique_lock<std::mutex>& lock, PyFrameObject* frame) = 0;
-    virtual void user_return(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg) = 0;
-    virtual void user_exception(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg) = 0;
+	PyObject* _pyDebugger = nullptr;
+    bool _quitting = false;
+    Breakpoint* _currentbp = nullptr;
+    std::unordered_map<std::string, std::unordered_map<line_t, std::vector<Breakpoint>>> _breaks;
+    exception_mode _exmode = exception_mode::NEVER;
+
+protected:
+	virtual void user_entry(PyFrameObject* frame) = 0;
+    virtual void user_call(PyFrameObject* frame) = 0;
+    virtual void user_line(PyFrameObject* frame) = 0;
+    virtual void user_return(PyFrameObject* frame, PyObject* arg) = 0;
+    virtual void user_exception(PyFrameObject* frame, PyObject* arg) = 0;
     virtual void do_clear(Breakpoint& bp) = 0;
     virtual void on_breakpoint_error(Breakpoint& bp, const std::string& msg) = 0;
 
     void reset();
-    void pause();
-    std::string canonic(const std::string& filename);
-	std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> get_stack(PyFrameObject* frame, PyObject* traceback);
+    void raiseException(const std::string& message);
 
 public:
+    bdb();
     ~bdb();
-    void enable_trace();
-    void disable_trace();
 
-    int trace_dispatch(PyFrameObject* frame, int event, PyObject* arg);
-    int dispatch_line(std::unique_lock<std::mutex>& lock, PyFrameObject* frame);
-    int dispatch_call(std::unique_lock<std::mutex>& lock, PyFrameObject* frame);
-    int dispatch_return(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg);
-    int dispatch_exception(std::unique_lock<std::mutex>& lock, PyFrameObject* frame, PyObject* arg);
+    static bool pyInit();
+
+    bool enable_trace();
+    bool enable_thread_trace();
+    void disable_trace();
+    bool trace_ignore() const { return _evaling || _quitting; }
+
+    std::string canonic(const std::string& filename);
+
+    virtual int trace_dispatch(PyFrameObject* frame, int event, PyObject* arg);
+    virtual int dispatch_line(PyFrameObject* frame);
+    virtual int dispatch_call(PyFrameObject* frame);
+    virtual int dispatch_return(PyFrameObject* frame, PyObject* arg);
+    virtual int dispatch_exception(PyFrameObject* frame, PyObject* arg);
 
     bool stop_here(PyFrameObject* frame) const;
     bool break_here(PyFrameObject* frame);
     bool is_cought(PyFrameObject* frame, PyObject* exception);
     bool break_anywhere(PyFrameObject* frame);
 
+    void pause();
     void set_step();
     void set_next(PyFrameObject* frame);
     void set_return(PyFrameObject* frame);
