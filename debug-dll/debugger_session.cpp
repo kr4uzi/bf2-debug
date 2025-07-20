@@ -45,6 +45,7 @@ std::uint32_t get_packet_length(asio::streambuf& buffer)
 
 asio::awaitable<void> debugger_session::run()
 {
+	std::println("[session] running on port {}", _socket.remote_endpoint().port());
 	try {
 		auto buffer = asio::streambuf{};
 		while (_socket.is_open()) {

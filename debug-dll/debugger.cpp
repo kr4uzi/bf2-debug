@@ -208,7 +208,7 @@ void debugger::stop_redirect_output()
 void debugger::user_entry(PyFrameObject* frame)
 {
     if (_wait_for_connection) {
-        std::println("Waiting for debugger to attach on {} ...", _port);
+        std::println("[debugger] waiting for session to connect on port {} ...", _port);
 
         while (!_session || !_session->initialized()) {
 			_ctx.run_one();

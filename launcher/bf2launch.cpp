@@ -24,7 +24,8 @@ int run_bf2_server(const std::filesystem::path& bf2Path, std::wstring commandLin
 	std::vector<std::string> normalizedDlls;
 	for (const auto& dll : injectDlls) {
 		try {
-			normalizedDlls.push_back(dll.string());
+			auto absolutePath = std::filesystem::absolute(dll);
+			normalizedDlls.push_back(absolutePath.string());
 		}
 		catch (std::system_error& e) {
 			auto utf8Path = dll.u8string();

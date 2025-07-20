@@ -1,27 +1,38 @@
 #include "bf2reg.h"
+#ifdef _WIN32
 #include <map>
 #include <print>
+#include <vector>
 #include <Windows.h>
+#endif
 
-std::string bf2_dir_from_registry()
+std::wstring bf2_dir_from_registry()
 {
-	std::map<std::string, std::string> regPaths = {
-		{ R"(SOFTWARE\EA GAMES\Battlefield 2 Server)", "GAMEDIR" },
-		{ R"(SOFTWARE\Electronic Arts\EA Games\Battlefield 2)", "InstallDir"},
+#ifdef _WIN32
+	std::map<std::wstring, std::wstring> regPaths = {
+		{ LR"(SOFTWARE\EA GAMES\Battlefield 2 Server)", L"GAMEDIR" },
+		{ LR"(SOFTWARE\Electronic Arts\EA Games\Battlefield 2)", L"InstallDir"},
 	};
 
 	for (const auto& [path, key] : regPaths) {
-		char value[MAX_PATH];
-		DWORD size = sizeof(value);
-		DWORD type = REG_SZ;
-		auto res = RegGetValueA(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, value, &size);
+		DWORD size = 0;
+		auto res = RegGetValueW(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, nullptr, &size);
+		if (res != ERROR_SUCCESS) {
+			continue;
+		}
+
+		std::vector<char> buffer(size);
+		res = RegGetValueW(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, buffer.data(), &size);
 		if (res != ERROR_SUCCESS) {
 			continue;
 		}
 
 		// REG_SZ is zero-terminated
-		return value;
+		return reinterpret_cast<wchar_t*>(buffer.data());
 	}
 
-	return "";
+	return {};
+#else
+	return {};
+#endif
 }
