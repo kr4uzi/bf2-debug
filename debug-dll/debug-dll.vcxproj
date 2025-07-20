@@ -46,14 +46,12 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <TargetName>bf2py-debug</TargetName>
+    <TargetName>bf2py$(BF2_PY_VERSION)-debug</TargetName>
     <CustomBuildBeforeTargets />
-    <PublicIncludeDirectories>..\python\Include</PublicIncludeDirectories>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <TargetName>bf2py-debug</TargetName>
+    <TargetName>bf2py$(BF2_PY_VERSION)-debug</TargetName>
     <CustomBuildBeforeTargets />
-    <PublicIncludeDirectories>..\python\Include</PublicIncludeDirectories>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>

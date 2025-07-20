@@ -131,28 +131,38 @@ void debugger::start_redirect_output()
     }
 
     _output_redirector = std::jthread([this](std::stop_token token) {
+        std::string line;
         char buffer[4096];
         while (!token.stop_requested()) {
-            auto bytesRead = read(_output_fd[0], buffer, sizeof(buffer) - 1);
+            auto bytesRead = read(_output_fd[0], buffer, sizeof(buffer));
             if (bytesRead <= 0) {
                 break;
             }
 
-            buffer[bytesRead] = '\0';
+            line += std::string(buffer, bytesRead);
 
-            if (_session) {
-                _session->send_output(buffer);
-            }
+            for (auto newLinePos = line.find('\n'); newLinePos != std::string::npos; newLinePos = line.find('\n')) {
+                auto output = line.substr(0, newLinePos);
+                line.erase(0, newLinePos + 1);
+
+                if (output.empty()) {
+                    continue;
+				}
+
+                if (_session) {
+                    _session->send_output(output);
+                }
 
 #ifdef _WIN32
-            OutputDebugStringA(buffer);
+                OutputDebugStringA(output.c_str());
 #else
-            syslog(LOG_DEBUG, "%s", buffer);
+                syslog(LOG_DEBUG, "%s", buffer.c_str());
 #endif
+            }
         }
 
         close(_output_fd[0]);
-        });
+    });
 }
 
 void debugger::stop_redirect_output()

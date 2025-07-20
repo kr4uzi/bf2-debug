@@ -66,7 +66,6 @@ asio::awaitable<void> debugger_session::run()
 			const char* data = asio::buffer_cast<const char*>(buffer.data());
 			json packet = json::parse(data, data + pkgLength);
 			buffer.consume(pkgLength);
-			std::println("{}", packet.dump(4));
 
 			const auto& type = packet["type"];
 			if (type == "request") {

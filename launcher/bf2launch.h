@@ -1,4 +1,6 @@
 #pragma once
 #include <vector>
+#include <filesystem>
 #include <string>
-int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, const std::string& bf2Path, const std::vector<std::string>& bf2args);
+
+int run_bf2_server(const std::filesystem::path& bf2Path, std::wstring bf2args, const std::vector<std::filesystem::path>& injectDlls);

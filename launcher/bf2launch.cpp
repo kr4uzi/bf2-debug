@@ -1,67 +1,60 @@
 #include "bf2launch.h"
+#ifdef _WIN32
 #include <Windows.h>
 #include <detours/detours.h>
+#include <iostream>
 #include <print>
 #include <format>
 #include <iomanip>
 #include <sstream>
 #include <filesystem>
 #include <thread>
+#include "unicode.h"
+#endif
 
-std::string to_utf8(const wchar_t* wstr)
+int run_bf2_server(const std::filesystem::path& bf2Path, std::wstring commandLine, const std::vector<std::filesystem::path>& injectDlls)
 {
-	auto len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-	auto str = std::string(len, '\0');
-	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, str.data(), len, nullptr, nullptr);
-	return str;
-}
-
-std::wstring to_wstring(const char* str)
-{
-	auto len = MultiByteToWideChar(CP_UTF8, 0, str, -1, nullptr, 0);
-	auto wstr = std::wstring(len, L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, str, -1, wstr.data(), len);
-	return wstr;
-}
-
-int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, const std::string& bf2Path, const std::vector<std::string>& bf2args)
-{
+#ifdef _WIN32
 	STARTUPINFOW si = { .cb = sizeof(si) };
 	PROCESS_INFORMATION pi = {};
 	DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED | DEBUG_PROCESS;
 
+	auto exePath = bf2Path / L"bf2_w32ded.exe";
 	std::vector<const char*> dlls;
 	std::vector<std::string> normalizedDlls;
-	bool hasDebugDll = false;
 	for (const auto& dll : injectDlls) {
-		if (dll.ends_with("bf2py-debug.dll")) {
-			hasDebugDll = true;
+		try {
+			normalizedDlls.push_back(dll.string());
+		}
+		catch (std::system_error& e) {
+			auto utf8Path = dll.u8string();
+			// while the printable path might not look pretty, it will at least not crash the console
+			auto printablePath = std::string{ utf8Path.begin(), utf8Path.end() };
+			std::println("error preparing dll: {}\ncaused by dll: {}", e.what(), printablePath);
+			return -1;
 		}
 
-		auto dllPath = std::filesystem::absolute(dll);
-		normalizedDlls.push_back(dllPath.string());
 		dlls.push_back(normalizedDlls.back().c_str());
 	}
 
-	if (!hasDebugDll) {
-		auto dllPath = std::filesystem::absolute("bf2py-debug.dll");
-		normalizedDlls.push_back(dllPath.string());
-		dlls.push_back(normalizedDlls.back().c_str());
-	}
+	std::wcout << "exec: " << exePath
+		<< "\nargs: " << (commandLine.empty() ? L"<none>" : commandLine)
+		<< "\ndir : " << bf2Path
+		<< std::endl;
 
-	std::wstring commandLine;
-	for (const auto& arg : bf2args) {
-		std::wstringstream ss;
-		ss << std::quoted(std::wstring{ arg.begin(), arg.end() });
-		commandLine += std::format(L" {}", ss.str());
+	if (dlls.empty()) {
+		std::println("dlls: <none>");
 	}
-
-	auto workingDir = bf2Path.empty() ? std::filesystem::current_path() : std::filesystem::path(bf2Path);
-	auto exePath = workingDir / "bf2_w32ded.exe";
+	else {
+		for (const auto& dll : dlls) {
+			std::println(" {}", dll);
+		}
+	}
+	
 	bool inheritHandles = false; // the bf2 server creates its own window and must not inerhit any handles
-	auto res = ::DetourCreateProcessWithDllsW(exePath.c_str(), commandLine.data(), nullptr, nullptr, inheritHandles, dwFlags, nullptr, workingDir.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
+	auto res = ::DetourCreateProcessWithDllsW(exePath.c_str(), commandLine.data(), nullptr, nullptr, inheritHandles, dwFlags, nullptr, bf2Path.c_str(), &si, &pi, dlls.size(), dlls.data(), nullptr);
 	if (!res) {
-		std::println("failed to create process");
+		std::println("failed to create process: {}", ::GetLastError());
 		return -1;
 	}
 
@@ -110,7 +103,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 					message = std::format("failed to get file information for dll handle: {}", error);
 				}
 				else {
-					message = std::format("loading dll: {}", to_utf8(fileInfo->FileName));
+					message = std::format("loading dll: {}", bf2py::to_utf8(fileInfo->FileName));
 				}
 
 				// msdn: debugger should close the handle to the DLL handle while processing LOAD_DLL_DEBUG_EVENT
@@ -123,7 +116,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 			SIZE_T bytesRead = 0;
 			if (ReadProcessMemory(pi.hProcess, strInfo.lpDebugStringData, messageBuffer.data(), messageBuffer.size(), &bytesRead)) {
 				if (strInfo.fUnicode) {
-					message = to_utf8(reinterpret_cast<wchar_t*>(messageBuffer.data()));
+					message = bf2py::to_utf8(reinterpret_cast<wchar_t*>(messageBuffer.data()));
 				}
 				else {
 					message = messageBuffer.data();
@@ -176,4 +169,7 @@ int run_bf2(const char* procName, const std::vector<std::string>& injectDlls, co
 	}
 
 	return 0;
+#else
+#error "run_bf2_server is only implemented for Windows"
+#endif
 }

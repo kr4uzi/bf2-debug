@@ -24,12 +24,24 @@
     <ClCompile Include="bf2reg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="bf2py.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="unicode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bf2launch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="bf2reg.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="bf2py.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="unicode.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
