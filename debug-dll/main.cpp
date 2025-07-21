@@ -13,7 +13,7 @@ auto bf2_Py_Initialize = ::Py_Initialize;
 auto bf2_Py_InitModule4 = ::Py_InitModule4;
 auto bf2_PyEval_InitThreads = ::PyEval_InitThreads;
 auto bf2_Py_Finalize = ::Py_Finalize;
-std::unique_ptr<debugger> g_debug = nullptr;
+std::unique_ptr<bf2py::debugger> g_debug = nullptr;
 
 BOOL __stdcall allocConsole()
 {
@@ -22,6 +22,7 @@ BOOL __stdcall allocConsole()
 	// stdout needs to be reinitialized after the console is allocated
     FILE* f;
     freopen_s(&f, "CONOUT$", "w", stdout);
+    freopen_s(&f, "CONOUT$", "w", stderr);
 
     if (g_debug) {
         g_debug->start_redirect_output();
@@ -36,7 +37,7 @@ void pyInitialize()
     // note: before bf2 calls Py_Initialize() it sets Py_NoSiteFlag to 1
     bf2_Py_Initialize();
 
-    if (!debugger::pyInit()) {
+    if (!bf2py::debugger::pyInit()) {
         std::println("Failed to initialize debugger");
         return;
     }
@@ -123,7 +124,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 		// by default, we stop on entry, unless the command line specifies otherwise
         std::string cmd = GetCommandLineA();
         bool dontStopOnEntry = cmd.contains("+pyDebugStopOnEntry=0");
-        g_debug.reset(new debugger(!dontStopOnEntry));
+        g_debug.reset(new bf2py::debugger(!dontStopOnEntry));
         g_debug->start();      
 
         DetourRestoreAfterWith();

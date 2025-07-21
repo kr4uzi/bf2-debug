@@ -30,6 +30,9 @@
     <ClCompile Include="debugger_session.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="output_redirect.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bdb.h">
@@ -51,6 +54,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="debugger_session.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="output_redirect.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

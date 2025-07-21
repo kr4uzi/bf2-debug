@@ -18,13 +18,7 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="bf2launch.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="bf2reg.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="bf2py.cpp">
+    <ClCompile Include="bf2launcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="unicode.cpp">
@@ -32,13 +26,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="bf2launch.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bf2reg.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bf2py.h">
+    <ClInclude Include="bf2launcher.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="unicode.h">

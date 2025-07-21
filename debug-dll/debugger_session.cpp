@@ -8,11 +8,14 @@
 #include <chrono>
 #include "dis.h"
 #include <libzippp/libzippp.h>
-
-std::hash<PyObject*> pyObjectHash{};
-std::hash<PyFrameObject*> pyFrameObjectHash{};
-std::hash<std::string> filenameHash{};
+using namespace bf2py;
 using namespace nlohmann;
+namespace {
+	std::hash<PyObject*> pyObjectHash{};
+	std::hash<PyFrameObject*> pyFrameObjectHash{};
+	std::hash<std::string> filenameHash{};
+}
+
 debugger_session::debugger_session(debugger& debugger, asio::ip::tcp::socket socket)
 	: _debugger(debugger), _socket(std::move(socket))
 {
@@ -120,6 +123,9 @@ asio::awaitable<void> debugger_session::run()
 				else if (command == "disconnect") {
 					co_await handle_disconnect(packet);
 				}
+				else if (command == "evaluate") {
+					co_await handle_evaluate(packet);
+				}
 				else {
 					std::println(stderr, "[session][error] Unknown request: {}", packet.dump(4));
 				}
@@ -134,62 +140,74 @@ asio::awaitable<void> debugger_session::run()
 void debugger_session::send_modpath(const std::string& modPath)
 {
 	send_sync({
-			{ "type", "event" },
-			{ "event", "bf2py" },
-			{ "body", {
-				{ "type", "modpath" },
-				{ "data",  modPath }
-			}}
-		});
+		{ "type", "event" },
+		{ "event", "bf2py" },
+		{ "body", {
+			{ "type", "modpath" },
+			{ "data",  modPath }
+		}}
+	});
 }
 
 void debugger_session::send_entry(std::uint32_t threadId)
 {
 	send_sync({
-			{ "type", "event" },
-			{ "event", "stopped" },
-			{ "body", {
-				{ "reason", "entry" },
-				{ "threadId",  threadId }
-			}}
-		});
+		{ "type", "event" },
+		{ "event", "stopped" },
+		{ "body", {
+			{ "reason", "entry" },
+			{ "threadId",  threadId }
+		}}
+	});
 }
 
 void debugger_session::send_step(std::uint32_t threadId)
 {
 	send_sync({
-			{ "type", "event" },
-			{ "event", "stopped" },
-			{ "body", {
-				{ "reason", "step" },
-				{ "threadId",  threadId }
-			}}
-		});
+		{ "type", "event" },
+		{ "event", "stopped" },
+		{ "body", {
+			{ "reason", "step" },
+			{ "threadId",  threadId }
+		}}
+	});
 }
 
 void debugger_session::send_exception(std::uint32_t threadId, const std::string& text)
 {
 	send_sync({
-			{ "type", "event" },
-			{ "event", "stopped" },
-			{ "body", {
-				{ "reason", "exception" },
-				{ "threadId",  threadId },
-				{ "text",  text }
-			}}
-		});
+		{ "type", "event" },
+		{ "event", "stopped" },
+		{ "body", {
+			{ "reason", "exception" },
+			{ "threadId",  threadId },
+			{ "text",  text }
+		}}
+	});
 }
 
 void debugger_session::send_output(const std::string& output)
 {
 	send_sync({
-			{ "type", "event" },
-			{ "event", "output" },
-			{ "body", {
-				{ "category", "console" },
-				{ "output", output }
-			}}
-		});
+		{ "type", "event" },
+		{ "event", "output" },
+		{ "body", {
+			{ "category", "console" },
+			{ "output", output }
+		}}
+	});
+}
+
+void debugger_session::send_output(const std::u8string& output)
+{
+	send_sync({
+		{ "type", "event" },
+		{ "event", "output" },
+		{ "body", {
+			{ "category", "console" },
+			{ "output", output }
+		}}
+	});
 }
 
 void debugger_session::send_sync(const json& data)
@@ -241,13 +259,13 @@ void debugger_session::forget(std::uint32_t threadId)
 asio::awaitable<void> debugger_session::handle_initialize(const json& packet)
 {
 	co_await async_send_response(packet, {
-			{ "supportsConfigurationDoneRequest", true },
-			{ "exceptionBreakpointFilters", json::array({
-					{ { "filter", "never" }, { "label", "Never" } },
-					{ { "filter", "always" }, { "label", "Always" } },
-					{ { "filter", "unhandled" }, { "label", "Unhandled" } }
-				}) }
-		});
+		{ "supportsConfigurationDoneRequest", true },
+		{ "exceptionBreakpointFilters", json::array({
+			{ { "filter", "never" }, { "label", "Never" } },
+			{ { "filter", "always" }, { "label", "Always" } },
+			{ { "filter", "unhandled" }, { "label", "Unhandled" } }
+		}) }
+	});
 
 	co_await async_send_event("initialized", {});
 }
@@ -272,13 +290,13 @@ asio::awaitable<void> debugger_session::handle_threads(const json& packet)
 			threads.push_back({
 				{ "id", thread->thread_id },
 				{ "name", threadName }
-				});
+			});
 		}
 	}
 
 	co_await async_send_response(packet, {
 		{ "threads", threads }
-		});
+	});
 }
 
 asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
@@ -302,7 +320,7 @@ asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
 	if (frame == nullptr) {
 		co_await async_send_response(packet, {
 			{ "error", std::format("Invalid threadId '{}'", threadId) }
-			}, false);
+		}, false);
 		co_return;
 	}
 
@@ -335,12 +353,12 @@ asio::awaitable<void> debugger_session::handle_stackTrace(const json& packet)
 			{ "line", frame->f_lineno },
 			{ "column", 1 },
 			{ "source", source }
-			});
+		});
 	}
 
 	co_await async_send_response(packet, {
 		{ "stackFrames", stackFrames }
-		});
+	});
 }
 
 asio::awaitable<void> debugger_session::handle_scopes(const json& packet)
@@ -350,34 +368,34 @@ asio::awaitable<void> debugger_session::handle_scopes(const json& packet)
 	if (it == _frame_refs.end()) {
 		co_await async_send_response(packet, {
 			{ "error", std::format("Invalid frameId '{}'", frameId) }
-			}, false);
+		}, false);
 		co_return;
 	}
 
 	auto scopes = json::array();
 	const auto& frame = it->second;
 	if (frame->f_locals) {
-		const auto refId = pyObjectHash(frame->f_locals);
+		const auto refId = ::pyObjectHash(frame->f_locals);
 		scopes.push_back({
-				{ "name", "Locals" },
-				{ "presentationHint", "locals" },
-				{ "variablesReference", refId }
-			});
+			{ "name", "Locals" },
+			{ "presentationHint", "locals" },
+			{ "variablesReference", refId }
+		});
 		_var_refs[refId] = frame->f_locals;
 	}
 
 	if (frame->f_globals && frame->f_globals != frame->f_locals) {
-		const auto refId = pyObjectHash(frame->f_globals);
+		const auto refId = ::pyObjectHash(frame->f_globals);
 		scopes.push_back({
-				{ "name", "Globals" },
-				{ "variablesReference", refId }
-			});
+			{ "name", "Globals" },
+			{ "variablesReference", refId }
+		});
 		_var_refs[refId] = frame->f_globals;
 	}
 
 	co_await async_send_response(packet, {
-			{ "scopes", scopes }
-		});
+		{ "scopes", scopes }
+	});
 }
 
 asio::awaitable<void> debugger_session::handle_variables(const json& packet)
@@ -386,8 +404,8 @@ asio::awaitable<void> debugger_session::handle_variables(const json& packet)
 	auto it = _var_refs.find(varId);
 	if (it == _var_refs.end()) {
 		co_await async_send_response(packet, {
-				{ "error", std::format("Invalid variablesReference '{}'", varId) }
-			}, false);
+			{ "error", std::format("Invalid variablesReference '{}'", varId) }
+		}, false);
 		co_return;
 	}
 
@@ -417,7 +435,7 @@ asio::awaitable<void> debugger_session::handle_variables(const json& packet)
 		}
 		else if (PyDict_Check(value)) {
 			type = "dict";
-			varId = pyObjectHash(key);
+			varId = ::pyObjectHash(key);
 			_var_refs[varId] = value;
 		}
 		else {
@@ -431,7 +449,7 @@ asio::awaitable<void> debugger_session::handle_variables(const json& packet)
 			{ "type", type },
 			{ "value", PyString_AsString(valueStr) },
 			{ "variablesReference", varId }
-			});
+		});
 
 		Py_DECREF(valueStr);
 		Py_DECREF(keyStr);
@@ -441,7 +459,7 @@ asio::awaitable<void> debugger_session::handle_variables(const json& packet)
 
 	co_await async_send_response(packet, {
 		{ "variables", variables }
-		});
+	});
 }
 
 asio::awaitable<void> debugger_session::handle_source(const json& packet)
@@ -451,7 +469,7 @@ asio::awaitable<void> debugger_session::handle_source(const json& packet)
 	if (cit != _source_cache.end()) {
 		co_await async_send_response(packet, {
 			{ "content", cit->second }
-			});
+		});
 		co_return;
 	}
 
@@ -459,7 +477,7 @@ asio::awaitable<void> debugger_session::handle_source(const json& packet)
 	if (rit == _source_refs.end()) {
 		co_await async_send_response(packet, {
 			{ "error", std::format("Invalid source reference '{}'", sourceRef) }
-			}, false);
+		}, false);
 		co_return;
 	}
 
@@ -469,7 +487,7 @@ asio::awaitable<void> debugger_session::handle_source(const json& packet)
 			return dis(arg->f_code);
 		}
 		else if constexpr (std::is_same_v<T, std::string>) {
-			auto filename = arg;
+			auto& filename = arg;
 			auto it = _zipcache.find(filename);
 			if (it != _zipcache.end()) {
 				return it->second;
@@ -497,7 +515,7 @@ asio::awaitable<void> debugger_session::handle_source(const json& packet)
 	_source_cache.emplace(sourceRef, content);
 	co_await async_send_response(packet, {
 		{ "content", content }
-		});
+	});
 }
 
 asio::awaitable<void> debugger_session::handle_setBreakpoints(const json& packet)
@@ -518,7 +536,7 @@ asio::awaitable<void> debugger_session::handle_setBreakpoints(const json& packet
 			);
 			validatedBreaks.push_back({
 				{ "verified", true }
-				});
+			});
 		}
 		response["breakpoints"] = validatedBreaks;
 	}
@@ -584,4 +602,41 @@ asio::awaitable<void> debugger_session::handle_disconnect(const json& packet)
 {
 	co_await async_send_response(packet, {});
 	_socket.close();
+}
+
+asio::awaitable<void> debugger_session::handle_evaluate(const nlohmann::json& packet)
+{
+	if (_debugger.state() != debugger::Status::Stopped) {
+		co_await async_send_response(packet, {
+			{ "error", "can only evaluate when stopped" }
+		}, false);
+		co_return;
+	}
+
+	// this needs some improvement
+	// https://docs.python.org/2.7/faq/extending.html?highlight=pyeval_evalcode
+	auto expression = packet["arguments"]["expression"].get<std::string>();
+	auto frame = _debugger.current_frame();
+	auto code = Py_CompileString(expression.c_str(), "<evaluate>", Py_single_input);
+	std::string result = "(error - see debugger console)";
+	if (code) {
+		auto evalResult = PyEval_EvalCode(reinterpret_cast<PyCodeObject*>(code), frame->f_globals, frame->f_locals);
+		if (evalResult) {
+			auto repr = PyObject_Repr(evalResult);
+			result = PyString_AS_STRING(repr);
+			Py_XDECREF(repr);
+			Py_DECREF(evalResult);
+		}
+		else {
+			PyErr_Print();
+		}
+	}
+	else {
+		PyErr_Print();
+	}
+
+	co_await async_send_response(packet, {
+		{ "result", "" },
+		{ "variablesReference", 0 }
+	});
 }

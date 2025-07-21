@@ -47,12 +47,12 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py$(BF2_PY_VERSION)-debug.dll"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py-debug.dll"</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(BF2_DIR)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py$(BF2_PY_VERSION)-debug.dll"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py-debug.dll"</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(BF2_DIR)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
@@ -111,7 +111,6 @@
     <ClCompile Include="drylaunch.cpp" />
     <ClCompile Include="host.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="python.cpp" />
     <ClCompile Include="usage.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -16,6 +16,7 @@
 #include <Python.h>
 #include <compile.h>
 #include <frameobject.h>
+#include <eval.h>
 #pragma warning(pop)
 
 #ifdef BF2PY_RESTORE_DEBUG

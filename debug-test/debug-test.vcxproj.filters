@@ -30,9 +30,6 @@
     <ClCompile Include="bf2reg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="python.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="python.h">
