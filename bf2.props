@@ -2,7 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
-    <BF2_DIR>C:\Battlefield 2</BF2_DIR>
+    <BF2_DIR>C:\Program Files (x86)\EA Games\Battlefield 2 Server</BF2_DIR>
     <BF2_PY_VERSION>2.3.4</BF2_PY_VERSION>
   </PropertyGroup>
   <ItemDefinitionGroup>
