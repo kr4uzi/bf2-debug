@@ -2,12 +2,6 @@
 #include <print>
 using namespace bf2py;
 
-debugger::debugger(bool stopOnEntry, asio::ip::port_type port)
-	: _wait_for_connection(stopOnEntry), _port(port)
-{
-
-}
-
 int debugger::trace_dispatch(PyFrameObject* frame, int event, PyObject* arg)
 {
     if (trace_ignore()) {
@@ -67,32 +61,6 @@ void debugger::start_io_runner()
     });
 }
 
-void debugger::start_redirect_output()
-{
-    auto msgCallback = [this](auto msg) {
-        if (_session) {
-            _session->send_output(msg);
-        }
-
-#ifdef _WIN32
-		auto str = reinterpret_cast<const char*>(msg.data());
-        auto len = MultiByteToWideChar(CP_UTF8, 0, str, -1, nullptr, 0);
-        auto wstr = std::wstring(len, L'\0');
-        ::MultiByteToWideChar(CP_UTF8, 0, str, -1, wstr.data(), len);
-        ::OutputDebugStringW(wstr.c_str());
-#else
-        ::syslog(LOG_ERR, "%s: %s", message.c_str(), ::strerror(errno));
-#endif
-	};
-
-    _output_redirector.start(msgCallback);
-}
-
-void debugger::stop_redirect_output()
-{
-    _output_redirector.stop();
-}
-
 void debugger::user_entry(PyFrameObject* frame)
 {
     if (_wait_for_connection) {
@@ -130,27 +98,31 @@ void debugger::user_line(PyFrameObject* frame)
     interaction(frame, nullptr);
 }
 
-void debugger::user_return(PyFrameObject* frame, PyObject* arg)
+void debugger::user_return(PyFrameObject* frame, PyObject* returnValue)
 {
     if (!_session) {
         return;
     }
 
-    if (frame->f_locals) {
-        PyDict_SetItemString(frame->f_locals, "__return__", arg);
+    if (frame->f_locals && returnValue) {
+        PyDict_SetItemString(frame->f_locals, "__return__", returnValue);
     }
 
     _session->send_step(frame->f_tstate->thread_id);
     interaction(frame, nullptr);
 }
 
-void debugger::user_exception(PyFrameObject* frame, PyObject* arg)
+void debugger::user_exception(PyFrameObject* frame, PyObject* excInfo)
 {
-    PyObject* type = PyTuple_GET_ITEM(arg, 0);
-    PyObject* value = PyTuple_GET_ITEM(arg, 1);
-    PyObject* traceback = PyTuple_GET_ITEM(arg, 2);
-    PyObject* valueRepr = PyObject_Repr(value);
-    PyObject* typeStr = PyObject_Str(type);
+    auto type = PyTuple_GET_ITEM(excInfo, 0);
+    auto value = PyTuple_GET_ITEM(excInfo, 1);
+    auto traceback = PyTuple_GET_ITEM(excInfo, 2);
+    PyNewRef valueRepr = PyObject_Repr(value);
+    PyNewRef typeStr = PyObject_Str(type);
+
+    if (!frame->f_locals) {
+        PyFrame_FastToLocals(frame);
+    }
 
     if (frame->f_locals) {
         auto tuple = PyTuple_New(2);
@@ -165,9 +137,6 @@ void debugger::user_exception(PyFrameObject* frame, PyObject* arg)
     if (valueRepr && typeStr) {
         _session->send_exception(frame->f_tstate->thread_id, std::format("{}: {}", PyString_AsString(typeStr), PyString_AsString(valueRepr)));
     }
-
-    Py_XDECREF(typeStr);
-    Py_XDECREF(valueRepr);
 
     interaction(frame, traceback);
 }
@@ -215,6 +184,13 @@ void debugger::do_clear(Breakpoint& bp)
 }
 
 void debugger::log(const std::string& msg)
+{
+    if (_session) {
+        _session->send_output(msg);
+    }
+}
+
+void debugger::log(const std::u8string& msg)
 {
     if (_session) {
         _session->send_output(msg);

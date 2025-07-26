@@ -6,7 +6,9 @@
 #include <ranges>
 #include <algorithm>
 #include <chrono>
-#include "dis.h"
+#include <thread>
+#include <chrono>
+#include "output_redirect.h"
 #include <libzippp/libzippp.h>
 using namespace bf2py;
 using namespace nlohmann;
@@ -205,7 +207,7 @@ void debugger_session::send_output(const std::u8string& output)
 		{ "event", "output" },
 		{ "body", {
 			{ "category", "console" },
-			{ "output", output }
+			{ "output", std::string{ output.begin(), output.end() } }
 		}}
 	});
 }
@@ -374,6 +376,10 @@ asio::awaitable<void> debugger_session::handle_scopes(const json& packet)
 
 	auto scopes = json::array();
 	const auto& frame = it->second;
+	if (!frame->f_locals) {
+		PyFrame_FastToLocals(frame);
+	}
+
 	if (frame->f_locals) {
 		const auto refId = ::pyObjectHash(frame->f_locals);
 		scopes.push_back({
@@ -442,17 +448,14 @@ asio::awaitable<void> debugger_session::handle_variables(const json& packet)
 			type = "object";
 		}
 
-		PyObject* keyStr = PyObject_Str(key);
-		PyObject* valueStr = PyObject_Str(value);
+		PyNewRef keyStr = PyObject_Str(key);
+		PyNewRef valueStr = PyObject_Str(value);
 		auto variable = json::object({
-			{ "name", PyString_AsString(keyStr) },
+			{ "name", std::string{PyString_AsString(keyStr)} },
 			{ "type", type },
-			{ "value", PyString_AsString(valueStr) },
+			{ "value", std::string{PyString_AsString(valueStr)} },
 			{ "variablesReference", varId }
 		});
-
-		Py_DECREF(valueStr);
-		Py_DECREF(keyStr);
 
 		variables.push_back(variable);
 	}
@@ -484,7 +487,7 @@ asio::awaitable<void> debugger_session::handle_source(const json& packet)
 	auto visitor = [&](auto&& arg) -> std::string {
 		using T = std::decay_t<decltype(arg)>;
 		if constexpr (std::is_same_v<T, PyFrameObject*>) {
-			return dis(arg->f_code);
+			return py_utils::dis(arg->f_code);
 		}
 		else if constexpr (std::is_same_v<T, std::string>) {
 			auto& filename = arg;
@@ -614,29 +617,48 @@ asio::awaitable<void> debugger_session::handle_evaluate(const nlohmann::json& pa
 	}
 
 	// this needs some improvement
-	// https://docs.python.org/2.7/faq/extending.html?highlight=pyeval_evalcode
+	// https://docs.python.org/2.7/faq/extending.html#how-do-i-tell-incomplete-input-from-invalid-input
 	auto expression = packet["arguments"]["expression"].get<std::string>();
 	auto frame = _debugger.current_frame();
-	auto code = Py_CompileString(expression.c_str(), "<evaluate>", Py_single_input);
-	std::string result = "(error - see debugger console)";
-	if (code) {
-		auto evalResult = PyEval_EvalCode(reinterpret_cast<PyCodeObject*>(code), frame->f_globals, frame->f_locals);
-		if (evalResult) {
-			auto repr = PyObject_Repr(evalResult);
-			result = PyString_AS_STRING(repr);
-			Py_XDECREF(repr);
-			Py_DECREF(evalResult);
+
+	auto result = py_utils::call([&] -> PyObject* {
+		auto code = Py_CompileString(expression.c_str(), "<evaluate>", Py_single_input);
+		if (code) {
+			PyObject* _code = code;
+			auto evalResult = PyEval_EvalCode(reinterpret_cast<PyCodeObject*>(_code), frame->f_globals, frame->f_locals);
+			if (evalResult) {
+				return evalResult;
+			}
 		}
-		else {
-			PyErr_Print();
-		}
+
+		PyErr_Print();
+		return nullptr;
+	});
+
+	std::u8string message;
+	if (!result) {
+		message = result.error();
 	}
 	else {
-		PyErr_Print();
+		PyNewRef pyResult = result->result;
+		if (pyResult && pyResult != Py_None) {
+			auto str = PyObject_Repr(pyResult);
+			message = reinterpret_cast<char8_t*>(PyString_AS_STRING(str));
+			Py_DECREF(str);
+		}
+		else if (!result->err.empty()) {
+			message = result->err;
+		}
+		else if (!result->out.empty()) {
+			message = result->out;
+		}
+		else {
+			message = u8"unable to get result";
+		}
 	}
 
 	co_await async_send_response(packet, {
-		{ "result", "" },
+		{ "result", std::string{ message.begin(), message.end() } },
 		{ "variablesReference", 0 }
 	});
 }

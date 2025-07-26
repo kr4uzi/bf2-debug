@@ -2,6 +2,7 @@
 #include <print>
 #include <filesystem>
 #include <string_view>
+using namespace bf2py;
 
 namespace {
     PyObject* quit_error = nullptr;
@@ -13,9 +14,9 @@ namespace {
 
     PyTypeObject bf2PyDebuggerType = {
         .ob_refcnt = 1,
-        .ob_type = &PyType_Type,
         .tp_name = (char*)"bf2py.Debugger",
-        .tp_basicsize = sizeof(bf2PyDebugger)
+        .tp_basicsize = sizeof(bf2PyDebugger),
+        .tp_flags = Py_TPFLAGS_DEFAULT
     };
 }
 
@@ -52,15 +53,14 @@ bool bdb::pyInit()
             // which has slightly more overhead than our own trace_dispatch and which works slightly different
             PyEval_SetTrace(
                 [](PyObject* obj, PyFrameObject* frame, int event, PyObject* arg) -> int {
-                    return reinterpret_cast<bf2PyDebugger*>(obj)->debugger->trace_dispatch(frame, event, arg);
+                    return static_cast<bf2PyDebugger*>(obj)->debugger->trace_dispatch(frame, event, arg);
                 },
-                reinterpret_cast<PyObject*>(self)
+                self
 			);
 
             // after the first call, python's trace will no longer ues the trace_trampoline, but instead our own function
-            Py_INCREF(Py_None);
-            return Py_None;
-            };
+            Py_RETURN_NONE;
+        };
 
         typeInitialized = PyType_Ready(&bf2PyDebuggerType) == 0;
     }
@@ -81,8 +81,11 @@ bool bdb::enable_trace()
 			return false;
 		}
 
+        new (self) bf2PyDebugger();
+        self->ob_refcnt = 1;
+        self->ob_type = &bf2PyDebuggerType;
+        self->ob_type->ob_refcnt++;
         self->debugger = this;
-		Py_INCREF(self);
 
         _pyDebugger = self;
 	}
@@ -99,32 +102,32 @@ bool bdb::enable_trace()
 
 bool bdb::enable_thread_trace()
 {
-    auto threadingModule = PyImport_ImportModule((char*)"threading");
+    PyNewRef threadingModule = PyImport_ImportModule((char*)"threading");
     if (!threadingModule) {
         std::println(stderr, "Failed to import threading module");
         return false;
     }
 
-    auto setTrace = PyObject_GetAttrString(threadingModule, (char*)"settrace");
+    auto threadingDict = PyModule_GetDict(threadingModule);
+    if (!threadingModule) {
+        std::println(stderr, "Failed to get threading module dict");
+        return false;
+    }
+
+    auto setTrace = PyDict_GetItemString(threadingDict, "settrace");
     if (!setTrace) {
         std::println(stderr, "Failed to get settrace from threading module");
-        Py_DECREF(threadingModule);
         return false;
     }
 
 	// register the callback which is implemented in bf2PyDebuggerType.tp_call
     // (the debugger object itself is callable)
-    auto res = PyObject_CallFunction(setTrace, (char*)"O", _pyDebugger);
-    if (res) {
-        Py_DECREF(res);
-	}
-	else {
+    PyNewRef res = PyObject_CallFunction(setTrace, (char*)"O", _pyDebugger);
+    if (!res) {
         std::println(stderr, "Failed to call threading.settrace");
     }
 
-    Py_DECREF(setTrace);
-    Py_DECREF(threadingModule);
-    return !!res;
+    return res;
 }
 
 void bdb::disable_trace()
@@ -221,7 +224,6 @@ std::pair<std::deque<std::pair<PyFrameObject*, std::size_t>>, std::size_t> bdb::
             traceback->tb_lineno
         });
         traceback = traceback->tb_next;
-        std::println("traceback!");
     }
 
     return { stack, i };

@@ -24,13 +24,13 @@
     <ClCompile Include="debugger.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="dis.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="debugger_session.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="output_redirect.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="python.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -42,9 +42,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="python.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="dis.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="debugger.h">

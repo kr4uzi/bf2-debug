@@ -90,6 +90,85 @@ bool launcher::checkAndNormalizeDLLs()
 #endif
 }
 
+#include <DbgHelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+void print_stacktrace(DWORD pid, HANDLE hThread, CONTEXT* context) {
+	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+	if (!hProcess) return;
+
+	SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS);
+	SymInitialize(hProcess, NULL, TRUE); // Load symbols
+
+	STACKFRAME64 frame = {};
+	DWORD machineType;
+
+#ifdef _M_X64
+	machineType = IMAGE_FILE_MACHINE_AMD64;
+	frame.AddrPC.Offset = context->Rip;
+	frame.AddrFrame.Offset = context->Rbp;
+	frame.AddrStack.Offset = context->Rsp;
+#elif defined(_M_IX86)
+	machineType = IMAGE_FILE_MACHINE_I386;
+	frame.AddrPC.Offset = context->Eip;
+	frame.AddrFrame.Offset = context->Ebp;
+	frame.AddrStack.Offset = context->Esp;
+#else
+#error Unsupported architecture
+#endif
+
+	frame.AddrPC.Mode = AddrModeFlat;
+	frame.AddrFrame.Mode = AddrModeFlat;
+	frame.AddrStack.Mode = AddrModeFlat;
+
+	for (int i = 0; i < 64; ++i) {
+		if (!StackWalk64(machineType, hProcess, hThread, &frame, context, NULL,
+			SymFunctionTableAccess64, SymGetModuleBase64, NULL)) {
+			break;
+		}
+
+		if (frame.AddrPC.Offset == 0) break;
+
+		DWORD64 addr = frame.AddrPC.Offset;
+
+		// Resolve symbol
+		char symbolBuffer[sizeof(SYMBOL_INFO) + 256];
+		PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
+		pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+		pSymbol->MaxNameLen = 255;
+
+		DWORD64 displacement = 0;
+		bool hasSymbol = SymFromAddr(hProcess, addr, &displacement, pSymbol);
+
+		// Resolve source line
+		IMAGEHLP_LINE64 line = {};
+		DWORD lineDisp = 0;
+		line.SizeOfStruct = sizeof(line);
+		BOOL hasLine = SymGetLineFromAddr64(hProcess, addr, &lineDisp, &line);
+
+		// Resolve module
+		IMAGEHLP_MODULE64 module = {};
+		module.SizeOfStruct = sizeof(module);
+		BOOL hasModule = SymGetModuleInfo64(hProcess, addr, &module);
+
+		// Print output
+		printf("  0x%llx", addr);
+		if (hasSymbol) {
+			printf(" %s + 0x%llx", pSymbol->Name, displacement);
+		}
+		if (hasLine) {
+			printf(" (%s:%lu)", line.FileName, line.LineNumber);
+		}
+		if (hasModule) {
+			printf(" [%s]", module.ImageName);
+		}
+		printf("\n");
+	}
+
+	SymCleanup(hProcess);
+	system("pause");
+}
+
 int launcher::run()
 {
 	if (!checkAndNormalizeDLLs()) {
@@ -120,7 +199,7 @@ int launcher::run()
 	bool inheritHandles = false; // the bf2 server creates its own window and must not inerhit any handles
 	auto res = ::DetourCreateProcessWithDllsW(exePath.c_str(), _args.data(), nullptr, nullptr, inheritHandles, dwFlags, nullptr, _path.c_str(), &si, &pi, _detourDllPtrs.size(), _detourDllPtrs.data(), nullptr);
 	if (!res) {
-		std::println("failed to create process: {}", ::GetLastError());
+		std::wcout << "failed to create process: " << ::error_message_from_error_code(::GetLastError()) << std::endl;
 		return -1;
 	}
 
@@ -137,8 +216,21 @@ int launcher::run()
 		if (event == EXCEPTION_DEBUG_EVENT) {
 			auto code = debugEvent.u.Exception.ExceptionRecord.ExceptionCode;
 
-			if (code == STATUS_BREAKPOINT) {
+			if (code == EXCEPTION_BREAKPOINT) {
 				message = L"breakpoint => continuing";
+			}
+			else if (code == EXCEPTION_ACCESS_VIOLATION) {
+				// It's 0xC0000005
+				HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, debugEvent.dwThreadId);
+				if (hThread) {
+					CONTEXT ctx = {};
+					ctx.ContextFlags = CONTEXT_FULL;
+					if (GetThreadContext(hThread, &ctx)) {
+						// We have the context: now stack trace
+						print_stacktrace(debugEvent.dwProcessId, hThread, &ctx);
+					}
+					CloseHandle(hThread);
+				}
 			}
 			else {
 				//continueEvent = DBG_EXCEPTION_NOT_HANDLED;
@@ -182,6 +274,12 @@ int launcher::run()
 		}
 
 		if (!message.empty()) {
+			if (message.ends_with(L'\n')) {
+				// debug messages usually end with newline which are desired
+				// for the debugger console, but not this program's console window
+				message.pop_back();
+			}
+
 			// make repeating messages not consume a new line
 			if (lastMessage.empty()) {
 				lastMessage = message;

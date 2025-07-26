@@ -39,6 +39,7 @@ bld/
 
 # Visual Studio 2017 auto generated files
 Generated\ Files/
+vcpkg_installed/
 
 # MSTest test Results
 [Tt]est[Rr]esult*/
@@ -433,7 +434,7 @@ FodyWeavers.xsd
 *.out
 *.app
 
-vcpkg_installed/
+# bf2-debug
 python-*/
 bf2.props
 dice_py.exp

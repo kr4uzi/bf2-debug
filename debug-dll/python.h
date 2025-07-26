@@ -29,4 +29,39 @@
 #  define Py_TYPE(ob)             (((PyObject*)(ob))->ob_type)
 #endif
 
+#ifndef PY_RETURN_NONE
+#define Py_RETURN_NONE return Py_INCREF(Py_None), Py_None
+#endif
+
+#include <memory>
+#include <expected>
+#include <string>
+#include <functional>
+namespace bf2py {
+	class PyNewRef {
+		struct PyDelete {
+			void operator()(PyObject* ptr) { Py_DECREF(ptr); }
+		};
+		std::unique_ptr<PyObject, PyDelete> _ptr;
+
+	public:
+		PyNewRef(PyObject* ptr = nullptr) : _ptr(ptr) {}
+		PyNewRef& operator=(PyObject* ptr) { _ptr.reset(ptr); return *this; }
+		operator bool() { return _ptr.operator bool(); }
+		operator PyObject* () { return _ptr.get(); }
+	};
+
+	struct py_call_result {
+		PyObject* result;
+		std::u8string out;
+		std::u8string err;
+	};
+
+	struct py_utils {
+		static std::expected<py_call_result, std::u8string> call(std::function<PyObject* ()> callback);
+		static std::string dis(PyCodeObject* co, int lasti = -1);
+		static bool init();
+	};
+}
+
 #endif // _BF2PY_PYTHON_H_

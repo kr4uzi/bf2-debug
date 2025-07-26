@@ -1,11 +1,11 @@
+#define __STDC_WANT_LIB_EXT1__ 1
 #include "output_redirect.h"
-#include <print>
-#include <cstdio>
+#include <string.h>
+#include <format>
+
 #ifdef _WIN32
-#include <Windows.h>
 #include <io.h>
 #include <fcntl.h>
-#include <debugapi.h>
 #define close _close
 #define read _read
 #define dup _dup
@@ -14,98 +14,97 @@
 #define pipe _pipe
 #else
 #include <unistd.h>
-#include <syslog.h>
 #endif
 using namespace bf2py;
 
-// this function is inteded to be used to display critical error messages that might occur
-// before the file_redirect has initialized
 namespace {
-    void show_error(const std::string& user_message)
+    std::u8string last_error_message()
     {
-        char errmsg[2048];
-        strerror_s(errmsg, errno);
-
-        auto message = std::format("{}: {} {}", user_message, errno, errmsg);
-#ifdef _WIN32
-        ::OutputDebugStringA(message.c_str());
-#else
-        ::syslog(LOG_ERR, "%s: %s", message.c_str(), ::strerror(errno));
+        auto bufferSize = std::size_t(20248);
+#ifdef __STDC_LIB_EXT1__
+        bufferSize = strerrorlen_s(errno);
 #endif
 
-        std::println("{}", message);
+        auto buffer = std::vector<char8_t>(bufferSize + 1, '\0');
+        if (strerror_s(reinterpret_cast<char*>(buffer.data()), buffer.size(), errno) == 0) {
+            return buffer.data();
+        }
+
+        auto defaultMessage = std::format("error {}", errno);
+        return std::u8string{ defaultMessage.begin(), defaultMessage.end() };
     }
 }
 
-bool output_redirect::start(std::function<void(std::u8string line)> callback)
+output_redirect::~output_redirect()
 {
-    if (_original_stdout != -1 && _original_stderr) {
-        // already started
-        return true;
-    }
+    stop();
+}
 
-    _original_stdout = ::dup(::fileno(stdout));
-    _original_stderr = ::dup(::fileno(stderr));
-    if (_original_stdout == -1 || _original_stderr == -1) {
-        ::show_error("dup failed for stdout or stderr");
-        stop();
+bool output_redirect::start(std::FILE* out)
+{
+    auto fd = ::fileno(out);
+    if (fd == -1) {
         return false;
     }
 
+	_out = out;
+    _out_alias_fd = ::dup(fd);
+    if (_out_alias_fd == -1) {
+        _err_callback(last_error_message());
+        return false;
+    }
+
+    int pipe_fd[2];
 #ifdef _WIN32
-    if (::pipe(_pipe, 4096, _O_BINARY) == -1) {
+    if (::pipe(pipe_fd, 4096, _O_BINARY) == -1) {
 #else
-    if (::pipe(_pipe) {
+    if (::pipe(pipe_fd) {
 #endif
-        ::show_error("pipe failed");
-        stop();
+        ::close(_out_alias_fd);
+        _err_callback(last_error_message());
         return false;
     }
 
-    // we assume only utf8 strings are printed (so no std::wcout is used)
-	// and stdout and stderr are newer used interleaved without a newline
-    if (::dup2(_pipe[1], ::fileno(stdout))) {
-        ::show_error("dup2 failed for stdout");
-        stop();
+    _read_fd = pipe_fd[0];
+        _write_fd = pipe_fd[1];
+
+        // close _out and replace it with our write pipe
+        if (::dup2(_write_fd, fd)) {
+            _err_callback(last_error_message());
+            return false;
+        }
+
+    // disable buffering (this seems to be necessary at least on windows)
+    if (::setvbuf(_out, nullptr, _IONBF, 0) != 0) {
+        _err_callback(last_error_message());
         return false;
     }
 
-    if (::dup2(_pipe[1], ::fileno(stderr))) {
-        ::show_error("dup2 failed for stderr");
-        stop();
-        return false;
-    }
-
-    if (::setvbuf(stdout, nullptr, _IONBF, 0) != 0) {
-        ::show_error("setvbuf failed for stdout");
-        stop();
-        return false;
-    }
-
-    if (::setvbuf(stderr, nullptr, _IONBF, 0) != 0) {
-        ::show_error("setvbuf failed for stderr");
-        stop();
-        return false;
-    }
-
-    _reader = std::jthread([this, callback](std::stop_token token) {
+    _reader = std::jthread([this](std::stop_token token) {
         std::u8string line;
         char8_t buffer[4096];
         while (!token.stop_requested()) {
-            auto bytesRead = ::read(_pipe[0], buffer, sizeof(buffer));
+            auto bytesRead = ::read(_read_fd, buffer, sizeof(buffer));
             if (bytesRead <= 0) {
                 break;
             }
 
             line.append(buffer, bytesRead);
-            for (auto newLinePos = line.find('\n'); newLinePos != std::string::npos; newLinePos = line.find('\n')) {
+            for (auto newLinePos = line.find('\n'); newLinePos != std::string::npos && !token.stop_requested(); newLinePos = line.find('\n')) {
                 auto output = line.substr(0, newLinePos);
                 line.erase(0, newLinePos + 1);
-                callback(output);
+                _callback(output);
             }
         }
 
-        ::close(_pipe[0]);
+        if (_read_fd != -1) {
+            if (::close(_read_fd) == 0) {
+                _read_fd = -1;
+            }
+            else {
+                _err_callback(last_error_message());
+            }
+        }
     });
 
     return true;
@@ -115,62 +114,45 @@ bool output_redirect::stop()
 {
     bool hasError = false;
 
-    // close write pipe
-    if (_pipe[1] != -1) {
-        if (::close(_pipe[1]) == -1) {
-            ::show_error("close failed (_output_fd[1])");
+    // make _reader end by canceling ::read
+    _reader.request_stop();
+    if (_write_fd != -1) {
+        if (::close(_write_fd) == -1) {
+            _err_callback(last_error_message());
             hasError = hasError || true;
         }
 
-        _pipe[1] = -1;
+        _write_fd = -1;
     }
 
-    // restore stdout
-    if (_original_stdout != -1) {
-        if (::dup2(_original_stdout, ::fileno(stdout)) == -1) {
-            ::show_error("dup2 failed for stdout");
+    // restore
+    if (_out_alias_fd != -1) {
+        if (::dup2(_out_alias_fd, ::fileno(_out)) == -1) {
+            _err_callback(last_error_message());
             hasError = hasError || true;
         }
-        else {
-            if (::close(_original_stdout) == -1) {
-                ::show_error("close failed (_original_stdout)");
-                hasError = hasError || true;
-            }
-        }
 
-        _original_stdout = -1;
-    }
-
-    // restore stderr
-    if (_original_stderr != -1) {
-        if (::dup2(_original_stderr, ::fileno(stderr)) == -1) {
-            ::show_error("dup2 failed for stderr");
+        if (::close(_out_alias_fd) == -1) {
+            _err_callback(last_error_message());
             hasError = hasError || true;
         }
-        else {
-            if (::close(_original_stderr) == -1) {
-                ::show_error("close failed (_original_stderr)");
-                hasError = hasError || true;
-            }
-        }
 
-        _original_stderr = -1;
+        _out_alias_fd = -1;
     }
 
     // stop output redirector thread
     if (_reader.joinable()) {
-        _reader.request_stop();
         _reader.join();
     }
 
-    // close read pipe (if not done by redirector thread - e.g. if start_redirect_output failed partially)
-    if (_pipe[0] != -1) {
-        if (::close(_pipe[0]) == -1) {
-            ::show_error("close failed (_pipe[0])");
+    // the read pipe might still be open, e.g. if start failed partially
+    if (_read_fd != -1) {
+        if (::close(_read_fd) == -1) {
+            _err_callback(last_error_message());
             hasError = hasError || true;
         }
 
-        _pipe[0] = -1;
+        _read_fd = -1;
     }
 
     return !hasError;

@@ -18,16 +18,7 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="host.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="drylaunch.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="usage.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="bf2reg.cpp">
+    <ClCompile Include="bf2simulator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -35,16 +26,7 @@
     <ClInclude Include="python.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="host.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="usage.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="drylaunch.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bf2reg.h">
+    <ClInclude Include="bf2simulator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
