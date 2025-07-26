@@ -1,26 +1,6 @@
 #include "debugger.h"
 #include <print>
-#define __STDC_WANT_LIB_EXT1__ 1
-#ifdef _WIN32
-#include <io.h>
-#include <fcntl.h>
-#include <debugapi.h>
-#define close _close
-#define read _read
-#define dup _dup
-#define dup2 _dup2
-#define fileno _fileno
-#define pipe _pipe
-#else
-#include <unistd.h>
-#include <syslog.h>
-#endif
-
-debugger::debugger(bool stopOnEntry, asio::ip::port_type port)
-    : _wait_for_connection(stopOnEntry), _port(port)
-{
-
-}
+using namespace bf2py;
 
 int debugger::trace_dispatch(PyFrameObject* frame, int event, PyObject* arg)
 {
@@ -81,130 +61,6 @@ void debugger::start_io_runner()
     });
 }
 
-void show_error(const std::string& user_message)
-{
-    char errmsg[2048];
-    strerror_s(errmsg, errno);
-
-    auto message = std::format("{}: {} {}", user_message, errno, errmsg);
-#ifdef _WIN32
-	OutputDebugStringA(message.c_str());
-#else
-	syslog(LOG_ERR, "%s: %s", message.c_str(), strerror(errno));
-#endif
-    
-	std::println("{}", message);
-}
-
-void debugger::start_redirect_output()
-{
-    if (_original_stdout_fd != -1) {
-        return;
-	}
-
-    _original_stdout_fd = dup(fileno(stdout));
-    if (_original_stdout_fd == -1) {
-        show_error("dup failed");
-        return;
-	}
-
-#ifdef _WIN32
-    if (pipe(_output_fd, 4096, _O_BINARY) == -1) {
-#else
-    if (pipe(_output_fd) {
-#endif
-        show_error("pipe failed");
-        stop_redirect_output();
-        return;
-    }
-
-    if (dup2(_output_fd[1], fileno(stdout))) {
-        show_error("pipe failed");
-        stop_redirect_output();
-        return;
-    }
-
-    if (setvbuf(stdout, NULL, _IONBF, 0) != 0) {
-        show_error("setvbuf failed");
-        stop_redirect_output();
-        return;
-    }
-
-    _output_redirector = std::jthread([this](std::stop_token token) {
-        std::string line;
-        char buffer[4096];
-        while (!token.stop_requested()) {
-            auto bytesRead = read(_output_fd[0], buffer, sizeof(buffer));
-            if (bytesRead <= 0) {
-                break;
-            }
-
-            line += std::string(buffer, bytesRead);
-
-            for (auto newLinePos = line.find('\n'); newLinePos != std::string::npos; newLinePos = line.find('\n')) {
-                auto output = line.substr(0, newLinePos);
-                line.erase(0, newLinePos + 1);
-
-                if (output.empty()) {
-                    continue;
-				}
-
-                if (_session) {
-                    _session->send_output(output);
-                }
-
-#ifdef _WIN32
-                OutputDebugStringA(output.c_str());
-#else
-                syslog(LOG_DEBUG, "%s", buffer.c_str());
-#endif
-            }
-        }
-
-        close(_output_fd[0]);
-    });
-}
-
-void debugger::stop_redirect_output()
-{
-    // close write pipe
-    if (_output_fd[1] != -1) {
-        if (close(_output_fd[1]) == -1) {
-            show_error("close failed (_output_fd[1])");
-		}
-
-		_output_fd[1] = -1;
-    }
-
-	// restore stdout
-    if (_original_stdout_fd != -1) {
-        if (dup2(_original_stdout_fd, fileno(stdout)) == -1) {
-            show_error("dup2 failed");
-		} else {
-            if (close(_original_stdout_fd) == -1) {
-                show_error("close failed (_original_stdout_fd)");
-            }
-        }
-
-        _original_stdout_fd = -1;
-	}
-
-	// stop output redirector thread
-    if (_output_redirector.joinable()) {
-        _output_redirector.request_stop();
-        _output_redirector.join();
-    }
-    
-    // close read pipe (if not done by redirector thread - e.g. if start_redirect_output failed partially)
-    if (_output_fd[0] != -1) {
-        if ( close(_output_fd[0]) == -1) {
-            show_error("close failed (_output_fd[0])");
-		}
-
-	    _output_fd[0] = -1;
-	}
-}
-
 void debugger::user_entry(PyFrameObject* frame)
 {
     if (_wait_for_connection) {
@@ -242,27 +98,31 @@ void debugger::user_line(PyFrameObject* frame)
     interaction(frame, nullptr);
 }
 
-void debugger::user_return(PyFrameObject* frame, PyObject* arg)
+void debugger::user_return(PyFrameObject* frame, PyObject* returnValue)
 {
     if (!_session) {
         return;
     }
 
-    if (frame->f_locals) {
-        PyDict_SetItemString(frame->f_locals, "__return__", arg);
+    if (frame->f_locals && returnValue) {
+        PyDict_SetItemString(frame->f_locals, "__return__", returnValue);
     }
 
     _session->send_step(frame->f_tstate->thread_id);
     interaction(frame, nullptr);
 }
 
-void debugger::user_exception(PyFrameObject* frame, PyObject* arg)
+void debugger::user_exception(PyFrameObject* frame, PyObject* excInfo)
 {
-    PyObject* type = PyTuple_GET_ITEM(arg, 0);
-    PyObject* value = PyTuple_GET_ITEM(arg, 1);
-    PyObject* traceback = PyTuple_GET_ITEM(arg, 2);
-    PyObject* valueRepr = PyObject_Repr(value);
-    PyObject* typeStr = PyObject_Str(type);
+    auto type = PyTuple_GET_ITEM(excInfo, 0);
+    auto value = PyTuple_GET_ITEM(excInfo, 1);
+    auto traceback = PyTuple_GET_ITEM(excInfo, 2);
+    PyNewRef valueRepr = PyObject_Repr(value);
+    PyNewRef typeStr = PyObject_Str(type);
+
+    if (!frame->f_locals) {
+        PyFrame_FastToLocals(frame);
+    }
 
     if (frame->f_locals) {
         auto tuple = PyTuple_New(2);
@@ -277,9 +137,6 @@ void debugger::user_exception(PyFrameObject* frame, PyObject* arg)
     if (valueRepr && typeStr) {
         _session->send_exception(frame->f_tstate->thread_id, std::format("{}: {}", PyString_AsString(typeStr), PyString_AsString(valueRepr)));
     }
-
-    Py_XDECREF(typeStr);
-    Py_XDECREF(valueRepr);
 
     interaction(frame, traceback);
 }
@@ -327,6 +184,13 @@ void debugger::do_clear(Breakpoint& bp)
 }
 
 void debugger::log(const std::string& msg)
+{
+    if (_session) {
+        _session->send_output(msg);
+    }
+}
+
+void debugger::log(const std::u8string& msg)
 {
     if (_session) {
         _session->send_output(msg);

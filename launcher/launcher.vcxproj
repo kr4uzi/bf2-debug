@@ -52,11 +52,11 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py$(BF2_PY_VERSION)-debug.dll"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py-debug.dll"</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py$(BF2_PY_VERSION)-debug.dll"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py-debug.dll"</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -103,16 +103,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="bf2launch.cpp" />
-    <ClCompile Include="bf2py.cpp" />
-    <ClCompile Include="bf2reg.cpp" />
+    <ClCompile Include="bf2launcher.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="unicode.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="bf2launch.h" />
-    <ClInclude Include="bf2py.h" />
-    <ClInclude Include="bf2reg.h" />
+    <ClInclude Include="bf2launcher.h" />
     <ClInclude Include="unicode.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

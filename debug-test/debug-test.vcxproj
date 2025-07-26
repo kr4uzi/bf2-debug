@@ -47,12 +47,12 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py$(BF2_PY_VERSION)-debug.dll"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py-debug.dll" +pyDebugForwardOutput=1</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(BF2_DIR)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py$(BF2_PY_VERSION)-debug.dll"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-inject="$(OutDir)bf2py-debug.dll" +pyDebugForwardOutput=1</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(BF2_DIR)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
@@ -79,9 +79,10 @@
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>..\dice_py.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
     <PreBuildEvent />
   </ItemDefinitionGroup>
@@ -99,27 +100,21 @@
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>..\dice_py.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="bf2reg.cpp" />
-    <ClCompile Include="drylaunch.cpp" />
-    <ClCompile Include="host.cpp" />
+    <ClCompile Include="bf2simulator.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="python.cpp" />
-    <ClCompile Include="usage.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="bf2reg.h" />
-    <ClInclude Include="drylaunch.h" />
-    <ClInclude Include="host.h" />
+    <ClInclude Include="bf2simulator.h" />
     <ClInclude Include="python.h" />
-    <ClInclude Include="usage.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

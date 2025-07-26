@@ -46,12 +46,12 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <TargetName>bf2py$(BF2_PY_VERSION)-debug</TargetName>
     <CustomBuildBeforeTargets />
+    <TargetName>bf2py-debug</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <TargetName>bf2py$(BF2_PY_VERSION)-debug</TargetName>
     <CustomBuildBeforeTargets />
+    <TargetName>bf2py-debug</TargetName>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
@@ -106,8 +106,9 @@
     <ClCompile Include="bdb.cpp" />
     <ClCompile Include="debugger.cpp" />
     <ClCompile Include="debugger_session.cpp" />
-    <ClCompile Include="dis.cpp" />
+    <ClCompile Include="output_redirect.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="python.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="asio.h" />
@@ -115,8 +116,8 @@
     <ClInclude Include="breakpoint.h" />
     <ClInclude Include="debugger.h" />
     <ClInclude Include="debugger_session.h" />
-    <ClInclude Include="dis.h" />
     <ClInclude Include="python.h" />
+    <ClInclude Include="output_redirect.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
