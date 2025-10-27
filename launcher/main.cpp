@@ -38,12 +38,11 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	autoDetectPath = false;
 	if (autoDetectPath) {
 		std::println("Auto-detecting Battlefield 2 (Server) installation path ...");
 		if (std::filesystem::exists("bf2_w32ded.exe")) {
 			std::println("Found bf2_w32ded.exe in current working directory.");
-			launcher.path(std::filesystem::current_path());
+			launcher.path(std::filesystem::canonical(std::filesystem::current_path()));
 		}
 		else if (launcher.setPathFromRegistry()) {
 			std::println("Battlefield 2 (Server) installation detected in registry");
