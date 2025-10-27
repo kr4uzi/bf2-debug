@@ -38,15 +38,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	if (!bf2Args.empty()) {
-		std::wstringstream ss;
-		for (const auto& arg : bf2Args) {
-			ss << " " << std::quoted(std::wstring{arg.begin(), arg.end()});
-		}
-
-		launcher.args(ss.str().substr(1));
-	}
-
+	autoDetectPath = false;
 	if (autoDetectPath) {
 		std::println("Auto-detecting Battlefield 2 (Server) installation path ...");
 		if (std::filesystem::exists("bf2_w32ded.exe")) {
@@ -90,6 +82,28 @@ int main(int argc, char* argv[])
 
 		dlls.push_back(bf2pyDebugDll);
 	}
+
+	launcher.args([&]() {
+		std::wstringstream ss;
+		auto path = launcher.path() / launcher.executable();
+		if (path.native().contains(' ')) {
+			ss << std::quoted(path.native());
+		}
+		else {
+			ss << path;
+		}
+
+		for (const auto& arg : bf2Args) {
+			if (arg.contains(' ')) {
+				ss << " " << std::quoted(arg);
+			}
+			else {
+				ss << " " << arg;
+			}
+		}
+
+		return ss.str();
+	}());
 
 	launcher.dlls(dlls);
 	launcher.run();

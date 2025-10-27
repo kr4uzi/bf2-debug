@@ -2,6 +2,16 @@
 #include <print>
 using namespace bf2py;
 
+debugger::debugger()
+{
+
+}
+
+debugger::~debugger()
+{
+    stop();
+}
+
 int debugger::trace_dispatch(PyFrameObject* frame, int event, PyObject* arg)
 {
     if (trace_ignore()) {
@@ -35,6 +45,10 @@ void debugger::start()
 
 void debugger::stop()
 {
+    if (_session) {
+        _session->stop();
+    }
+
     _ctx.stop();
 }
 
@@ -114,6 +128,10 @@ void debugger::user_return(PyFrameObject* frame, PyObject* returnValue)
 
 void debugger::user_exception(PyFrameObject* frame, PyObject* excInfo)
 {
+    if (!_session) {
+        return;
+    }
+
     auto type = PyTuple_GET_ITEM(excInfo, 0);
     auto value = PyTuple_GET_ITEM(excInfo, 1);
     auto traceback = PyTuple_GET_ITEM(excInfo, 2);

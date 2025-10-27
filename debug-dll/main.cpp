@@ -1,6 +1,10 @@
+#define __STDC_WANT_LIB_EXT1__ 1
+#include <stdio.h>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <detours/detours.h>
+#endif
 #include <type_traits>
 #include <print>
 #include <functional>
@@ -44,13 +48,15 @@ BOOL __stdcall allocConsole()
     
     // stdout needs to be reinitialized after the console is allocated
     FILE* f;
-    ::freopen_s(&f, "CONOUT$", "w", stdout);
-    ::freopen_s(&f, "CONOUT$", "w", stderr);
-    g_stderr_redirect.callback(output_callback);
-    g_stdout_redirect.callback(output_callback);
+    if (::freopen_s(&f, "CONOUT$", "w", stderr) == 0) {
+        g_stderr_redirect.callback(output_callback);
+        g_stderr_redirect.start(stderr);
+    }
 
-    g_stdout_redirect.start(stdout);
-    g_stderr_redirect.start(stderr);
+    if (::freopen_s(&f, "CONOUT$", "w", stdout) == 0) {
+        g_stdout_redirect.callback(output_callback);
+        g_stdout_redirect.start(stdout);
+    }
 
 	return res;
 }
@@ -186,7 +192,7 @@ PyObject* pyInitModule4(char* name, PyMethodDef* methods, char* doc, PyObject* s
 PyObject* pyInitModule4(const char* name, PyMethodDef* methods, const char* doc, PyObject* self, int apiver)
 #endif
 {
-	if (strcmp(name, "host") == 0) {
+	if (std::strcmp(name, "host") == 0) {
         bf2_logWrite = methods[0].ml_meth;
 		methods[0].ml_meth = logWrite;
 
@@ -254,6 +260,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         DetourAttach((PVOID*)&bf2_Py_Finalize, pyFinalize);
         DetourUpdateThread(GetCurrentThread());
         commitError = DetourTransactionCommit();
+        if (commitError) {
+            std::println("[bf2py-debug] detours failed - error {}", commitError);
+            return FALSE;
+        }
     }
     else if (dwReason == DLL_PROCESS_DETACH) {
         if (!commitError) {
@@ -265,12 +275,18 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
             DetourDetach((PVOID*)&bf2_Py_Initialize, pyInitialize);
             DetourDetach((PVOID*)&bf2_AllocConsole, allocConsole);
             commitError = DetourTransactionCommit();
-            g_debug.~debugger();
+            
+            g_stdout_redirect.stop();
+            g_stderr_redirect.stop();
+            g_debug.stop();
         }
-    }
+        else {
+            commitError = 0;
+        }
 
-    if (commitError) {
-        std::println("failed to detour Py_Initialize: {}", commitError);
+        if (commitError) {
+            std::println("[bf2py-debug] detours failed - error {}", commitError);
+        }
     }
 
     return TRUE;

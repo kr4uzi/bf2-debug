@@ -36,6 +36,9 @@ namespace bf2py {
 		std::map<std::string, PyCFunction> _hostModule;
 
 	public:
+		debugger();
+		~debugger();
+
 		void setHostModule(const decltype(_hostModule)& _hostModule);
 
 		void start();

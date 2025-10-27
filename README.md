@@ -1,7 +1,15 @@
-# bf2-debug
-This project enables proper debugging for the embedded python used in Battlefield 2.
+This project enables proper debugging of the embedded python used in Battlefield 2.
+I was not able to get any of the available python debuggers to work (e.g. pydebug, pydevd) - I think they rely a little too much on networking support which is limited in bf2's python.
 
-# bf2 debugging
+For this reason, I've created a custom dll which is injected into bf2 at startup which overwrites the standard Python initialize methods
+present in dice_py.dll. Then the low level debugging capabilities of Python are used to start a debugger compatible with the Debugger Adapter Protocol used by Visual Studio Code.
+
+The project is split into three subprojects:
+- the debugger dll itself (bf2py-debug.dll)
+- a bf2 simulator which simulates the bf2 startup sequence with the bf2py-debug.dll injected
+- a launcher which starts the battlefield 2 server and injects the debugger dll
+
+# debugging battlefield 2
 1. double-click launcher.exe (launches bf2_w32ded.exe detected from local > server (registry) > client (registry))
 2. Launch VS-Code: right-click <bf2-path>\python > "Open with Code"
 3. open "Run and Debug" (ctrl+shift+d) > Add Configuration... > Remote Attach > localhost (default) > 5678 (default)
@@ -10,6 +18,7 @@ This project enables proper debugging for the embedded python used in Battlefiel
 The launcher accepts the following parameters:
  - -bf2path=<path/to/bf2>
  - -inject=<path/to/dll>
+ - everything else is forwarded to the server
 
 The launcher has the following hierarchy when searching for the "bf2_w32ded.exe":
 1. -bf2path parameter

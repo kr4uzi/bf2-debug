@@ -139,6 +139,11 @@ asio::awaitable<void> debugger_session::run()
 	}
 }
 
+void debugger_session::stop()
+{
+	_socket.close();
+}
+
 void debugger_session::send_modpath(const std::string& modPath)
 {
 	send_sync({

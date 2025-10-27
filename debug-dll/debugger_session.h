@@ -27,6 +27,7 @@ namespace bf2py {
 
 		bool initialized() const { return _initialized; }
 		asio::awaitable<void> run();
+		void stop();
 
 		void send_sync(const nlohmann::json& data);
 		asio::awaitable<void> async_send(const nlohmann::json& data);

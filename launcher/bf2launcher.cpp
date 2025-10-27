@@ -4,6 +4,7 @@ using namespace bf2py;
 #ifdef _WIN32
 #include <Windows.h>
 #include <detours/detours.h>
+#include <DbgHelp.h>
 #include <iostream>
 #include <expected>
 #include <print>
@@ -57,6 +58,77 @@ namespace {
 
 		return fileInfo->FileName;
 	}
+
+	void printStackTrace(DWORD pid, HANDLE hThread, CONTEXT* context) {
+		HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+		if (!hProcess) return;
+
+		SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS);
+		SymInitialize(hProcess, NULL, TRUE); // Load symbols
+
+		STACKFRAME64 frame = {};
+		DWORD machineType;
+
+#ifdef _M_X64
+		machineType = IMAGE_FILE_MACHINE_AMD64;
+		frame.AddrPC.Offset = context->Rip;
+		frame.AddrFrame.Offset = context->Rbp;
+		frame.AddrStack.Offset = context->Rsp;
+#elif defined(_M_IX86)
+		machineType = IMAGE_FILE_MACHINE_I386;
+		frame.AddrPC.Offset = context->Eip;
+		frame.AddrFrame.Offset = context->Ebp;
+		frame.AddrStack.Offset = context->Esp;
+#else
+#error Unsupported architecture
+#endif
+
+		frame.AddrPC.Mode = AddrModeFlat;
+		frame.AddrFrame.Mode = AddrModeFlat;
+		frame.AddrStack.Mode = AddrModeFlat;
+
+		while (
+			StackWalk64(machineType, hProcess, hThread, &frame, context, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL)
+			&& frame.AddrPC.Offset != 0
+		) {
+			DWORD64 addr = frame.AddrPC.Offset;
+
+			// Resolve symbol
+			char symbolBuffer[sizeof(SYMBOL_INFO) + 256];
+			PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
+			pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+			pSymbol->MaxNameLen = 255;
+
+			DWORD64 displacement = 0;
+			bool hasSymbol = SymFromAddr(hProcess, addr, &displacement, pSymbol);
+
+			// Resolve source line
+			IMAGEHLP_LINE64 line = {};
+			DWORD lineDisp = 0;
+			line.SizeOfStruct = sizeof(line);
+			BOOL hasLine = SymGetLineFromAddr64(hProcess, addr, &lineDisp, &line);
+
+			// Resolve module
+			IMAGEHLP_MODULE64 module = {};
+			module.SizeOfStruct = sizeof(module);
+			BOOL hasModule = SymGetModuleInfo64(hProcess, addr, &module);
+
+			// Print output
+			printf("  0x%llx", addr);
+			if (hasSymbol) {
+				printf(" %s + 0x%llx", pSymbol->Name, displacement);
+			}
+			if (hasLine) {
+				printf(" (%s:%lu)", line.FileName, line.LineNumber);
+			}
+			if (hasModule) {
+				printf(" [%s]", module.ImageName);
+			}
+			printf("\n");
+		}
+
+		SymCleanup(hProcess);
+	}
 }
 #endif
 
@@ -88,85 +160,6 @@ bool launcher::checkAndNormalizeDLLs()
 #else
 	return true;
 #endif
-}
-
-#include <DbgHelp.h>
-#pragma comment(lib, "dbghelp.lib")
-
-void print_stacktrace(DWORD pid, HANDLE hThread, CONTEXT* context) {
-	HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-	if (!hProcess) return;
-
-	SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS);
-	SymInitialize(hProcess, NULL, TRUE); // Load symbols
-
-	STACKFRAME64 frame = {};
-	DWORD machineType;
-
-#ifdef _M_X64
-	machineType = IMAGE_FILE_MACHINE_AMD64;
-	frame.AddrPC.Offset = context->Rip;
-	frame.AddrFrame.Offset = context->Rbp;
-	frame.AddrStack.Offset = context->Rsp;
-#elif defined(_M_IX86)
-	machineType = IMAGE_FILE_MACHINE_I386;
-	frame.AddrPC.Offset = context->Eip;
-	frame.AddrFrame.Offset = context->Ebp;
-	frame.AddrStack.Offset = context->Esp;
-#else
-#error Unsupported architecture
-#endif
-
-	frame.AddrPC.Mode = AddrModeFlat;
-	frame.AddrFrame.Mode = AddrModeFlat;
-	frame.AddrStack.Mode = AddrModeFlat;
-
-	for (int i = 0; i < 64; ++i) {
-		if (!StackWalk64(machineType, hProcess, hThread, &frame, context, NULL,
-			SymFunctionTableAccess64, SymGetModuleBase64, NULL)) {
-			break;
-		}
-
-		if (frame.AddrPC.Offset == 0) break;
-
-		DWORD64 addr = frame.AddrPC.Offset;
-
-		// Resolve symbol
-		char symbolBuffer[sizeof(SYMBOL_INFO) + 256];
-		PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
-		pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-		pSymbol->MaxNameLen = 255;
-
-		DWORD64 displacement = 0;
-		bool hasSymbol = SymFromAddr(hProcess, addr, &displacement, pSymbol);
-
-		// Resolve source line
-		IMAGEHLP_LINE64 line = {};
-		DWORD lineDisp = 0;
-		line.SizeOfStruct = sizeof(line);
-		BOOL hasLine = SymGetLineFromAddr64(hProcess, addr, &lineDisp, &line);
-
-		// Resolve module
-		IMAGEHLP_MODULE64 module = {};
-		module.SizeOfStruct = sizeof(module);
-		BOOL hasModule = SymGetModuleInfo64(hProcess, addr, &module);
-
-		// Print output
-		printf("  0x%llx", addr);
-		if (hasSymbol) {
-			printf(" %s + 0x%llx", pSymbol->Name, displacement);
-		}
-		if (hasLine) {
-			printf(" (%s:%lu)", line.FileName, line.LineNumber);
-		}
-		if (hasModule) {
-			printf(" [%s]", module.ImageName);
-		}
-		printf("\n");
-	}
-
-	SymCleanup(hProcess);
-	system("pause");
 }
 
 int launcher::run()
@@ -208,6 +201,7 @@ int launcher::run()
 	DEBUG_EVENT debugEvent;
 	std::wstring lastMessage;
 	std::size_t repCount = 0;
+	auto skipException = false;
 	// WaitForSingleObject(pi.hProcess, INFINITE);
 	while (WaitForDebugEvent(&debugEvent, INFINITE)) {
 		DWORD continueEvent = DBG_CONTINUE;
@@ -220,16 +214,32 @@ int launcher::run()
 				message = L"breakpoint => continuing";
 			}
 			else if (code == EXCEPTION_ACCESS_VIOLATION) {
-				// It's 0xC0000005
-				HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, debugEvent.dwThreadId);
+				auto hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, debugEvent.dwThreadId);
 				if (hThread) {
 					CONTEXT ctx = {};
 					ctx.ContextFlags = CONTEXT_FULL;
 					if (GetThreadContext(hThread, &ctx)) {
-						// We have the context: now stack trace
-						print_stacktrace(debugEvent.dwProcessId, hThread, &ctx);
+						printStackTrace(debugEvent.dwProcessId, hThread, &ctx);
 					}
+
 					CloseHandle(hThread);
+				}
+
+				if (!skipException) {
+					auto selection = ::MessageBoxA(nullptr, "Access Violation Exception caught!\nContinue?", "Debugger Exception", MB_ABORTRETRYIGNORE | MB_ICONWARNING | MB_DEFBUTTON2);
+					if (selection == IDABORT) {
+						::TerminateProcess(pi.hProcess, 0);
+						break;
+					} else if (selection == IDRETRY) {
+						continueEvent = DBG_EXCEPTION_HANDLED;
+					}
+					else if (selection == IDIGNORE) {
+						continueEvent = DBG_EXCEPTION_HANDLED;
+						skipException = false; // do not skip next exceptions
+					}
+				}
+				else {
+					message = std::format(L"Access Violation Exception caught in PID: {}, Code: {:#x} => continuing", debugEvent.dwProcessId, code);
 				}
 			}
 			else {
@@ -344,9 +354,11 @@ std::string launcher::getPythonVersion() const
 		return {};
 	}
 
-	auto freeHandle = std::unique_ptr<decltype(handle), void(*)(decltype(handle)*)>(
-		&handle, [](HMODULE* hndl) { ::FreeLibrary(*hndl); }
-	);
+	struct cleaner {
+		decltype(handle)& _handle;
+		~cleaner() { ::FreeLibrary(_handle); }
+	} cleanup{ handle };
+
 	auto pyGetVersion = reinterpret_cast<const char* (*)()>(::GetProcAddress(handle, "Py_GetVersion"));
 	if (pyGetVersion) {
 		return pyGetVersion();
@@ -367,14 +379,14 @@ bool launcher::setPathFromRegistry()
 	};
 
 	for (const auto& [path, key] : regPaths) {
-		DWORD size = 0;
-		auto res = RegGetValueW(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, nullptr, &size);
+		auto size = ::DWORD(0);
+		auto res = ::RegGetValueW(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, nullptr, &size);
 		if (res != ERROR_SUCCESS) {
 			continue;
 		}
 
-		std::vector<char> buffer(size);
-		res = RegGetValueW(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, buffer.data(), &size);
+		auto buffer = std::vector<unsigned char>(size);
+		res = ::RegGetValueW(HKEY_LOCAL_MACHINE, path.c_str(), key.c_str(), RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, buffer.data(), &size);
 		if (res != ERROR_SUCCESS) {
 			auto errorCode = ::GetLastError();
 			std::wcerr << "RegGetValueW failed (" << errorCode << ": " << ::error_message_from_error_code(errorCode) << std::endl;
@@ -382,7 +394,7 @@ bool launcher::setPathFromRegistry()
 		}
 
 		// REG_SZ is zero-terminated
-		_path = reinterpret_cast<wchar_t*>(buffer.data());
+		_path.assign(reinterpret_cast<wchar_t*>(buffer.data()));
 		return true;
 	}
 #endif

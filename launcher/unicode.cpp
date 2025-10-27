@@ -44,6 +44,8 @@ bool bf2py::argv_to_utf8(int& argc, char**& argv)
 		argv[i] = new char[utf8Str.size() + 1];
 		strcpy_s(argv[i], utf8Str.size() + 1, utf8Str.c_str());
 	}
+
+	::LocalFree(wargv);
 #else
 	// non-windows use utf-8 by default
 #endif
